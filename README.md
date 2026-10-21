@@ -114,12 +114,34 @@ shell.
 
 ---
 
+## Áreas de trabalho (abas)
+
+As abas no cabeçalho funcionam como **áreas de trabalho independentes**: cada
+uma tem seus próprios terminais, posição e zoom. As sessões continuam vivas ao
+trocar de aba.
+
+- **+** cria uma nova área com um terminal no centro.
+- Clique em uma aba para trocar de área; clique em **×** para fechar (com
+  confirmação se houver terminais).
+- **Duplo clique no nome da aba** renomeia a área.
+- `Ctrl+Shift+T` cria uma área; `Ctrl+Tab` e `Ctrl+Shift+Tab` alternam.
+- O menu **Janela** também traz essas ações.
+
+Quando um terminal está **maximizado**, o cabeçalho dele vira uma barra de abas
+com os nomes de todos os terminais daquela área. Clique em um nome para trazer
+outro terminal para a visão maximizada. Fora do modo maximizado, a visão normal
+do canvas é mantida.
+
+---
+
 ## Comandos rápidos
 
 O painel translúcido no canto inferior esquerdo guarda seus comandos favoritos.
-Clique em **+**, dê um nome (opcional) e informe o comando. Marque **Executar
-depois de colar** se quiser que o `Enter` seja enviado automaticamente; sem a
-marca, o comando é apenas colado no terminal em foco para você confirmar.
+Ele fica **oculto** e aparece quando o mouse encosta no canto inferior esquerdo
+da tela. Clique em **+**, dê um nome (opcional) e informe o comando. Marque
+**Executar depois de colar** se quiser que o `Enter` seja enviado
+automaticamente; sem a marca, o comando é apenas colado no terminal em foco para
+você confirmar.
 
 - O painel pode ser recolhido pelo botão `▾` (o estado é lembrado).
 - Comandos marcados para executar exibem um `↵` na lista.
@@ -127,7 +149,7 @@ marca, o comando é apenas colado no terminal em foco para você confirmar.
   passa a ser **Atualizar**.
 - Para remover um comando, clique em `×`.
 - Os comandos ficam salvos em `localStorage["canvas-terminal.quick-commands.v1"]`.
-- Em tela cheia o painel continua visível e se reposiciona acima da borda.
+- Em tela cheia o painel continua disponível no mesmo canto.
 
 ---
 
@@ -136,6 +158,8 @@ marca, o comando é apenas colado no terminal em foco para você confirmar.
 | Atalho | Ação |
 |--------|------|
 | `Ctrl+T` (ou `Cmd+T`) | Novo terminal no centro do viewport |
+| `Ctrl+Shift+T` | Nova área de trabalho |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Próxima / área de trabalho anterior |
 | `Ctrl+Q` (ou `Cmd+Q`) | Sair do aplicativo |
 | `Ctrl+Shift+W` (ou `Cmd+Shift+W`) | Fechar terminal em foco (funciona com o terminal focado) |
 | `Ctrl+W` com o terminal em foco | Vai para o shell (apaga a palavra anterior); fora dele, fecha o terminal |
@@ -178,11 +202,15 @@ As cores ficam em variáveis CSS em `src/styles.css` (`:root` = escuro,
 
 ## Preferências
 
-O layout (posição, zoom e terminais) é salvo automaticamente em:
+O layout de todas as áreas de trabalho (abas, terminais, posição e zoom) é
+salvo automaticamente em:
 
 ```
-localStorage["canvas-terminal.layout.v1"]
+localStorage["canvas-terminal.workspaces.v1"]
 ```
+
+O layout antigo de área única (`canvas-terminal.layout.v1`) é migrado
+automaticamente para a primeira área na primeira execução desta versão.
 
 ---
 

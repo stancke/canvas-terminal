@@ -256,6 +256,130 @@ body {
   background: var(--window-border);
 }
 
+/* ---- Abas de áreas de trabalho ---- */
+
+#workspace-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+  margin-left: 4px;
+}
+
+#workspace-tab-list {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+#workspace-tab-list::-webkit-scrollbar {
+  display: none;
+}
+
+.workspace-tab {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 74px;
+  max-width: 190px;
+  padding: 4px 5px 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.workspace-tab:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.workspace-tab.active {
+  background: var(--window);
+  border-color: var(--window-border);
+  color: var(--text);
+}
+
+.workspace-tab:focus-visible {
+  outline: 1px solid var(--accent-dim);
+  outline-offset: 1px;
+}
+
+.tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-name.editing {
+  padding: 0 2px;
+  border-radius: 3px;
+  outline: 1px solid var(--accent);
+  cursor: text;
+}
+
+.tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.45;
+}
+
+.workspace-tab:hover .tab-close,
+.workspace-tab.active .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.workspace-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.workspace-add:hover {
+  background: var(--hover);
+  border-color: var(--window-border);
+  color: var(--text);
+}
+
 /* ---- Diálogo (atalhos / sobre) ---- */
 
 #app-dialog {
@@ -350,6 +474,42 @@ body {
 
 .dialog-body p {
   margin: 0 0 10px;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 16px 14px;
+}
+
+.dialog-footer.hidden {
+  display: none;
+}
+
+.dialog-footer button {
+  padding: 5px 12px;
+  background: var(--window);
+  border: 1px solid var(--window-border);
+  border-radius: 5px;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dialog-footer button:hover {
+  border-color: var(--accent-dim);
+}
+
+#dialog-confirm {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+#dialog-confirm:hover {
+  background: var(--accent-hover);
 }
 
 .toolbar-status {
@@ -455,6 +615,72 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Abas dos terminais, exibidas no lugar do título quando maximizado. */
+.term-tabs {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: calc(3px * var(--z, 1));
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.term-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.term-window.maximized .term-name {
+  display: none;
+}
+
+.term-window.maximized .term-tabs {
+  display: flex;
+}
+
+.term-tab {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: calc(180px * var(--z, 1));
+  padding: calc(3px * var(--z, 1)) calc(8px * var(--z, 1));
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: calc(4px * var(--z, 1));
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--z, 1));
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.term-tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.term-tab-name.editing {
+  padding: 0 2px;
+  border-radius: 2px;
+  outline: 1px solid var(--accent);
+  cursor: text;
+}
+
+.term-tab:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.term-tab.active {
+  background: var(--window);
+  border-color: var(--window-border);
+  color: var(--text);
 }
 
 .term-controls {
@@ -616,6 +842,16 @@ body {
 
 /* ---- Comandos rápidos (painel inferior esquerdo) ---- */
 
+#quick-hotzone {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  width: 14px;
+  height: 96px;
+  z-index: 1001;
+  background: transparent;
+}
+
 #quick-panel {
   position: fixed;
   left: 14px;
@@ -634,6 +870,17 @@ body {
   backdrop-filter: blur(12px) saturate(1.2);
   -webkit-backdrop-filter: blur(12px) saturate(1.2);
   font-family: var(--font-ui);
+  /* Fica fora da tela até o mouse encostar no canto inferior esquerdo. */
+  transform: translateX(calc(-100% - 24px));
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 170ms ease, opacity 170ms ease, bottom 170ms ease;
+}
+
+#quick-panel.visible {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .quick-header {

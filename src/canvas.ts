@@ -73,6 +73,9 @@ export class Canvas {
   addTerminal(id: number, terminal: TerminalWindow): void {
     this.terminals.set(id, terminal);
     this.world.appendChild(terminal.element);
+    terminal.render(this.zoom);
+    terminal.refit();
+    this.notifyTerminalsChanged();
     this.requestRender();
   }
 
@@ -82,7 +85,35 @@ export class Canvas {
       terminal.dispose();
       this.terminals.delete(id);
     }
+    this.notifyTerminalsChanged();
     this.requestRender();
+  }
+
+  /** Remove as janelas ativas do world sem destruí-las (troca de workspace). */
+  detachTerminals(): void {
+    for (const terminal of this.terminals.values()) {
+      terminal.blur();
+      terminal.element.remove();
+    }
+    this.terminals.clear();
+    this.notifyTerminalsChanged();
+    this.requestRender();
+  }
+
+  /** Anexa as janelas de uma área de trabalho e sincroniza o tamanho do xterm. */
+  attachTerminals(terminals: TerminalWindow[]): void {
+    for (const terminal of terminals) {
+      this.terminals.set(terminal.id, terminal);
+      this.world.appendChild(terminal.element);
+      terminal.render(this.zoom);
+      terminal.refit();
+    }
+    this.notifyTerminalsChanged();
+    this.requestRender();
+  }
+
+  private notifyTerminalsChanged(): void {
+    document.dispatchEvent(new CustomEvent("canvas-terminals-changed"));
   }
 
   getTerminal(id: number): TerminalWindow | undefined {

@@ -12,7 +12,15 @@ import {
   listShells,
   type ShellInfo,
 } from "./pty";
-import { loadLayout, saveLayout } from "./persistence";
+import {
+  flushSave,
+  loadWorkspaces,
+  saveWorkspaces,
+  toSavedTerminal,
+  type SavedTerminal,
+  type SavedView,
+  type SavedWorkspace,
+} from "./persistence";
 import {
   createQuickCommand,
   loadQuickCommands,
@@ -24,12 +32,26 @@ import { initTheme, onThemeChange, themeLabel, toggleTheme } from "./theme";
 const DEFAULT_W = 720;
 const DEFAULT_H = 420;
 
+interface Workspace {
+  id: string;
+  name: string;
+  view: SavedView;
+  /** Terminais já instanciados (PTYs vivos) nesta área. */
+  terminals: TerminalWindow[];
+  /** Terminais salvos de uma área ainda não aberta nesta sessão. */
+  pending: SavedTerminal[];
+  initialized: boolean;
+  lastFocusedId?: number;
+}
+
 let canvas: Canvas;
 let shells: ShellInfo[] = [];
 let focusedTerminal: TerminalWindow | null = null;
 let zCounter = 10;
 let quickCommands: QuickCommand[] = [];
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
+let workspaces: Workspace[] = [];
+let activeWorkspace: Workspace | null = null;
 
 const toolbar = {
   shellSelect: document.querySelector<HTMLSelectElement>("#shell-select")!,
@@ -52,17 +74,23 @@ async function main(): Promise<void> {
   // Uma recarga do webview deixaria os PTYs antigos órfãos: limpa antes de restaurar.
   await killAllTerminals().catch(() => 0);
   window.addEventListener("beforeunload", () => {
+    persist();
+    flushSave();
     void killAllTerminals().catch(() => 0);
   });
 
   canvas = new Canvas("#viewport", "#world");
   canvas.onEmptyContextMenu = showEmptyContextMenu;
-  canvas.onViewChange = () => updateStatus();
+  canvas.onViewChange = () => {
+    updateStatus();
+    persist();
+  };
 
   shells = await listShells();
   populateShellSelect();
 
   bindToolbar();
+  bindWorkspaceTabs();
   bindQuickPanel();
   bindGlobalShortcuts();
   bindAutoHideToolbar();
@@ -70,11 +98,11 @@ async function main(): Promise<void> {
   bindContextMenu();
   bindTitlebarContext();
 
-  await restoreLayout();
+  await restoreWorkspaces();
   updateStatus();
   trackMouseCoordinates();
 
-  if (canvas.getAllTerminals().length === 0) {
+  if (activeWorkspace && activeWorkspace.terminals.length === 0) {
     await addTerminalAtCenter();
   }
 }
@@ -94,6 +122,7 @@ function selectedShell(): string {
 }
 
 async function addTerminalAtCenter(): Promise<void> {
+  if (!activeWorkspace) return;
   const center = canvas.centerWorldPoint();
   const x = center.x - DEFAULT_W / 2;
   const y = center.y - DEFAULT_H / 2;
@@ -109,12 +138,86 @@ async function addTerminal(
   cwd?: string,
   title?: string,
 ): Promise<TerminalWindow> {
-  const cwdPath = cwd || (await defaultCwd());
-  const shell = shells.find((s) => s.id === shellId) || shells[0];
-  const terminalTitle = title || `${shell.name} #${canvas.getAllTerminals().length + 1}`;
+  if (!activeWorkspace) throw new Error("Nenhuma área de trabalho ativa");
+  return addTerminalToWorkspace(activeWorkspace, shellId, x, y, w, h, cwd, title);
+}
 
-  const terminal = await createTerminal(
-    canvas,
+function terminalTitleFor(
+  workspace: Workspace,
+  shellId: string,
+  title?: string,
+): string {
+  if (title) return title;
+  const shell = shells.find((s) => s.id === shellId) || shells[0];
+  return `${shell?.name ?? shellId} #${workspace.terminals.length + 1}`;
+}
+
+/** Cria o TerminalWindow (PTY + xterm) e liga os callbacks à área de trabalho. */
+async function createTerminalForWorkspace(
+  workspace: Workspace,
+  shellId: string,
+  cwd: string,
+  title: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): Promise<TerminalWindow> {
+  const terminal = await createTerminal(canvas, shellId, cwd, title, x, y, w, h);
+  terminal.element.style.zIndex = String(++zCounter);
+
+  terminal.onFocus = (id) => {
+    focusedTerminal = terminal;
+    workspace.lastFocusedId = id;
+  };
+  terminal.onClose = () => {
+    workspace.terminals = workspace.terminals.filter((entry) => entry !== terminal);
+    if (workspace === activeWorkspace) {
+      if (focusedTerminal === terminal) focusedTerminal = null;
+      canvas.removeTerminal(terminal.id);
+    }
+    if (workspace.lastFocusedId === terminal.id) {
+      workspace.lastFocusedId =
+        workspace.terminals[workspace.terminals.length - 1]?.id;
+    }
+    renderWorkspaceTabs();
+    persist();
+    updateStatus();
+  };
+  terminal.onRestart = async (state) => {
+    await addTerminalToWorkspace(
+      workspace,
+      state.shellId,
+      state.x,
+      state.y,
+      state.w,
+      state.h,
+      state.cwd,
+      state.title,
+    );
+  };
+  terminal.onChange = () => {
+    persist();
+    updateStatus();
+  };
+
+  return terminal;
+}
+
+async function addTerminalToWorkspace(
+  workspace: Workspace,
+  shellId: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  cwd?: string,
+  title?: string,
+): Promise<TerminalWindow> {
+  const cwdPath = cwd || (await defaultCwd());
+  const terminalTitle = terminalTitleFor(workspace, shellId, title);
+  const terminal = await createTerminalForWorkspace(
+    workspace,
     shellId,
     cwdPath,
     terminalTitle,
@@ -124,26 +227,21 @@ async function addTerminal(
     h,
   );
 
-  terminal.element.style.zIndex = String(++zCounter);
-  terminal.onFocus = (id) => {
-    focusedTerminal = canvas.getTerminal(id) || null;
-  };
-  terminal.onClose = () => {
-    if (focusedTerminal === terminal) focusedTerminal = null;
-    canvas.removeTerminal(terminal.id);
-    persist();
-    updateStatus();
-  };
-  terminal.onRestart = async (state) => {
-    await addTerminal(state.shellId, state.x, state.y, state.w, state.h, state.cwd, state.title);
-  };
-  terminal.onChange = () => {
-    persist();
-    updateStatus();
-  };
-
-  canvas.addTerminal(terminal.id, terminal);
-  focusedTerminal = terminal;
+  workspace.terminals.push(terminal);
+  if (workspace === activeWorkspace) {
+    const previousMaximized = workspace.terminals.find(
+      (entry) => entry.maximized && entry !== terminal,
+    );
+    canvas.addTerminal(terminal.id, terminal);
+    focusedTerminal = terminal;
+    // Se a área está em modo maximizado, o novo terminal assume o lugar como
+    // nova aba maximizada (em vez de flutuar por cima da janela maximizada).
+    if (previousMaximized) {
+      previousMaximized.toggleMaximize();
+      terminal.toggleMaximize();
+    }
+    terminal.focus();
+  }
   persist();
   updateStatus();
   return terminal;
@@ -223,6 +321,9 @@ function bindMenuActions(): void {
   on("menu-center", () => centerView());
   on("menu-fullscreen", () => void toggleFullscreen());
 
+  on("menu-new-workspace", () => void createWorkspace());
+  on("menu-next-workspace", () => void cycleWorkspace(1));
+  on("menu-prev-workspace", () => void cycleWorkspace(-1));
   on("menu-organize", () => organizeTerminals());
   on("menu-cycle", () => cycleFocus(1));
   on("menu-maximize", () => focusedTerminal?.toggleMaximize());
@@ -234,9 +335,17 @@ function bindMenuActions(): void {
 
 /* ---- Diálogos ---- */
 
+let dialogConfirmAction: (() => void) | null = null;
+
 function bindDialog(): void {
   const dialog = document.getElementById("app-dialog")!;
   document.getElementById("dialog-close")?.addEventListener("click", () => closeDialog());
+  document.getElementById("dialog-cancel")?.addEventListener("click", () => closeDialog());
+  document.getElementById("dialog-confirm")?.addEventListener("click", () => {
+    const action = dialogConfirmAction;
+    closeDialog();
+    action?.();
+  });
   dialog.addEventListener("mousedown", (e) => {
     if (e.target === dialog) closeDialog();
   });
@@ -245,19 +354,39 @@ function bindDialog(): void {
 function showDialog(title: string, html: string): void {
   document.getElementById("dialog-title")!.textContent = title;
   document.getElementById("dialog-body")!.innerHTML = html;
+  document.getElementById("dialog-footer")!.classList.add("hidden");
+  dialogConfirmAction = null;
   document.getElementById("app-dialog")!.classList.remove("hidden");
+}
+
+/** Diálogo com ações (Cancelar / Confirmar). */
+function showConfirm(
+  title: string,
+  html: string,
+  confirmLabel: string,
+  action: () => void,
+): void {
+  showDialog(title, html);
+  document.getElementById("dialog-footer")!.classList.remove("hidden");
+  const confirmButton = document.getElementById("dialog-confirm") as HTMLButtonElement;
+  confirmButton.textContent = confirmLabel;
+  dialogConfirmAction = action;
 }
 
 function closeDialog(): boolean {
   const dialog = document.getElementById("app-dialog")!;
   if (dialog.classList.contains("hidden")) return false;
   dialog.classList.add("hidden");
+  document.getElementById("dialog-footer")!.classList.add("hidden");
+  dialogConfirmAction = null;
   return true;
 }
 
 function showShortcutsDialog(): void {
   const shortcuts: Array<[string, string]> = [
     ["Novo terminal", "Ctrl+T"],
+    ["Nova área de trabalho", "Ctrl+Shift+T"],
+    ["Próxima / área anterior", "Ctrl+Tab / Ctrl+Shift+Tab"],
     ["Fechar terminal", "Ctrl+Shift+W"],
     ["Sair do aplicativo", "Ctrl+Q"],
     ["Ciclar foco entre terminais", "Ctrl+PageDown / Ctrl+PageUp"],
@@ -321,6 +450,7 @@ function openQuickForm(item?: QuickCommand): void {
 
   editingQuickId = item?.id ?? null;
   panel.classList.remove("collapsed");
+  panel.classList.add("visible");
   persistQuickCollapsed(false);
   form.classList.remove("hidden");
   labelInput.value = item?.label ?? "";
@@ -368,6 +498,36 @@ function bindQuickPanel(): void {
     persistQuickCollapsed(nowCollapsed);
     if (nowCollapsed) closeQuickForm();
   });
+
+  // Auto-hide: o painel só aparece quando o mouse encosta no canto inferior
+  // esquerdo e se esconde ao sair, como o cabeçalho.
+  const hotzone = document.getElementById("quick-hotzone")!;
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const showPanel = () => {
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+    panel.classList.add("visible");
+  };
+
+  const scheduleHidePanel = () => {
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      hideTimer = null;
+      if (panel.contains(document.activeElement)) return;
+      if (panel.matches(":hover")) return;
+      panel.classList.remove("visible");
+    }, 350);
+  };
+
+  hotzone.addEventListener("mouseenter", showPanel);
+  hotzone.addEventListener("click", showPanel);
+  panel.addEventListener("mouseenter", showPanel);
+  panel.addEventListener("mouseleave", scheduleHidePanel);
+  panel.addEventListener("focusin", showPanel);
+  panel.addEventListener("focusout", scheduleHidePanel);
 
   form.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -490,6 +650,344 @@ function flashHint(message: string): void {
     hintTimer = null;
     hint.textContent = hint.dataset.original || original;
   }, 3000);
+}
+
+/* ---- Áreas de trabalho (abas) ---- */
+
+function makeWorkspaceId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `w${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  }
+}
+
+function nextWorkspaceName(): string {
+  const names = new Set(workspaces.map((workspace) => workspace.name));
+  let index = workspaces.length + 1;
+  while (names.has(`Área ${index}`)) index++;
+  return `Área ${index}`;
+}
+
+function makeWorkspace(name?: string, view?: SavedView): Workspace {
+  return {
+    id: makeWorkspaceId(),
+    name: name ?? nextWorkspaceName(),
+    view: view ?? { panX: 0, panY: 0, zoom: 1 },
+    terminals: [],
+    pending: [],
+    initialized: true,
+    lastFocusedId: undefined,
+  };
+}
+
+function savedToWorkspace(saved: SavedWorkspace): Workspace {
+  return {
+    id: saved.id,
+    name: saved.name,
+    view: saved.view,
+    terminals: [],
+    pending: saved.terminals,
+    initialized: false,
+    lastFocusedId: undefined,
+  };
+}
+
+/** Instancia os terminais salvos de uma área na primeira vez que ela abre. */
+async function instantiateWorkspace(workspace: Workspace): Promise<void> {
+  if (workspace.initialized) return;
+  workspace.initialized = true;
+  const pending = workspace.pending;
+  workspace.pending = [];
+
+  for (const item of pending) {
+    try {
+      const title = terminalTitleFor(workspace, item.shell, item.title);
+      const base = item.maximized && item.geom ? item.geom : item;
+      const terminal = await createTerminalForWorkspace(
+        workspace,
+        item.shell,
+        item.cwd,
+        title,
+        base.x,
+        base.y,
+        base.w,
+        base.h,
+      );
+      if (item.maximized && item.geom) {
+        terminal.savedGeom = {
+          id: terminal.id,
+          shellId: item.shell,
+          cwd: item.cwd,
+          title,
+          x: item.geom.x,
+          y: item.geom.y,
+          w: item.geom.w,
+          h: item.geom.h,
+          maximized: false,
+        };
+        terminal.maximized = true;
+      }
+      workspace.terminals.push(terminal);
+    } catch {
+      // Uma sessão que falhou não impede a restauração das demais.
+    }
+  }
+}
+
+/** Anexa a área ao canvas (a view é aplicada antes de posicionar as janelas). */
+async function showWorkspace(workspace: Workspace): Promise<void> {
+  await instantiateWorkspace(workspace);
+
+  activeWorkspace = workspace;
+  canvas.setView(workspace.view.panX, workspace.view.panY, workspace.view.zoom);
+  canvas.attachTerminals(workspace.terminals);
+
+  const maximized = workspace.terminals.find((terminal) => terminal.maximized);
+  focusedTerminal =
+    maximized ??
+    workspace.terminals.find((terminal) => terminal.id === workspace.lastFocusedId) ??
+    workspace.terminals[0] ??
+    null;
+
+  if (focusedTerminal) {
+    focusedTerminal.focus();
+  } else {
+    canvas.setCanvasActive(true);
+  }
+
+  renderWorkspaceTabs();
+  updateStatus();
+}
+
+let workspaceBusy = false;
+
+/** Serializa troca/criação/remoção de áreas (spawns de PTY podem demorar). */
+async function withWorkspaceLock(task: () => Promise<void>): Promise<void> {
+  if (workspaceBusy) return;
+  workspaceBusy = true;
+  try {
+    await task();
+  } finally {
+    workspaceBusy = false;
+  }
+}
+
+async function switchToWorkspace(target: Workspace): Promise<void> {
+  if (activeWorkspace) {
+    activeWorkspace.view = {
+      panX: canvas.panX,
+      panY: canvas.panY,
+      zoom: canvas.zoom,
+    };
+    canvas.detachTerminals();
+  }
+
+  await showWorkspace(target);
+  persist();
+}
+
+async function activateWorkspace(id: string): Promise<void> {
+  await withWorkspaceLock(async () => {
+    const target = workspaces.find((workspace) => workspace.id === id);
+    if (!target || target === activeWorkspace) return;
+    await switchToWorkspace(target);
+  });
+}
+
+async function restoreWorkspaces(): Promise<void> {
+  const layout = loadWorkspaces();
+
+  if (layout) {
+    workspaces = layout.workspaces.map(savedToWorkspace);
+    const active =
+      workspaces.find((workspace) => workspace.id === layout.activeId) ??
+      workspaces[0];
+    await showWorkspace(active);
+  } else {
+    const workspace = makeWorkspace("Área 1");
+    workspaces = [workspace];
+    await showWorkspace(workspace);
+  }
+
+  renderWorkspaceTabs();
+}
+
+async function createWorkspace(): Promise<void> {
+  await withWorkspaceLock(async () => {
+    const workspace = makeWorkspace(undefined, { panX: 0, panY: 0, zoom: 1 });
+    workspaces.push(workspace);
+    renderWorkspaceTabs();
+    await switchToWorkspace(workspace);
+    await addTerminalAtCenter();
+    persist();
+  });
+}
+
+async function cycleWorkspace(direction: number): Promise<void> {
+  if (workspaces.length < 2 || !activeWorkspace) return;
+  const index = workspaces.indexOf(activeWorkspace);
+  const next = workspaces[(index + direction + workspaces.length) % workspaces.length];
+  await activateWorkspace(next.id);
+}
+
+function bindWorkspaceTabs(): void {
+  document.getElementById("workspace-add")?.addEventListener("click", () => {
+    void createWorkspace();
+  });
+}
+
+function renderWorkspaceTabs(): void {
+  const list = document.getElementById("workspace-tab-list");
+  if (!list) return;
+  list.innerHTML = "";
+
+  for (const workspace of workspaces) {
+    const tab = document.createElement("div");
+    tab.className =
+      "workspace-tab" + (workspace === activeWorkspace ? " active" : "");
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(workspace === activeWorkspace));
+    tab.tabIndex = 0;
+    tab.title = workspace.name;
+
+    const name = document.createElement("span");
+    name.className = "tab-name";
+    name.textContent = workspace.name;
+    name.addEventListener("dblclick", (event) => {
+      event.stopPropagation();
+      startWorkspaceRename(workspace, name);
+    });
+    tab.appendChild(name);
+
+    if (workspaces.length > 1) {
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "tab-close";
+      close.title = "Fechar área de trabalho";
+      close.textContent = "×";
+      close.addEventListener("click", (event) => {
+        event.stopPropagation();
+        requestCloseWorkspace(workspace);
+      });
+      tab.appendChild(close);
+    }
+
+    tab.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).closest(".tab-close")) return;
+      void activateWorkspace(workspace.id);
+    });
+    tab.addEventListener("keydown", (event) => {
+      if ((event.target as HTMLElement).closest(".tab-close")) return;
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        void activateWorkspace(workspace.id);
+      }
+    });
+
+    list.appendChild(tab);
+  }
+
+  list
+    .querySelector<HTMLElement>(".workspace-tab.active")
+    ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function startWorkspaceRename(workspace: Workspace, nameEl: HTMLElement): void {
+  if (nameEl.isContentEditable) return;
+  nameEl.contentEditable = "true";
+  nameEl.classList.add("editing");
+  nameEl.focus();
+
+  const range = document.createRange();
+  range.selectNodeContents(nameEl);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+
+  const finish = (commit: boolean) => {
+    nameEl.removeEventListener("keydown", onKey, true);
+    nameEl.removeEventListener("blur", onBlur, true);
+    const value = (nameEl.textContent || "").trim();
+    nameEl.contentEditable = "false";
+    nameEl.classList.remove("editing");
+    if (commit && value) workspace.name = value;
+    renderWorkspaceTabs();
+    persist();
+  };
+  const onKey = (event: KeyboardEvent) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finish(false);
+    }
+  };
+  const onBlur = () => finish(true);
+
+  nameEl.addEventListener("keydown", onKey, true);
+  nameEl.addEventListener("blur", onBlur, true);
+}
+
+function requestCloseWorkspace(workspace: Workspace): void {
+  if (workspaces.length <= 1) return;
+  const count = workspace.terminals.length + workspace.pending.length;
+  if (count === 0) {
+    void removeWorkspace(workspace);
+    return;
+  }
+  showConfirm(
+    "Fechar área de trabalho",
+    `<p>Fechar <strong>${escapeHtml(workspace.name)}</strong>?</p>
+     <p>${
+       count === 1
+         ? "1 terminal desta área será encerrado."
+         : `${count} terminais desta área serão encerrados.`
+     }</p>`,
+    "Fechar área",
+    () => void removeWorkspace(workspace),
+  );
+}
+
+async function removeWorkspace(workspace: Workspace): Promise<void> {
+  await withWorkspaceLock(async () => {
+    if (workspaces.length <= 1) return;
+
+    if (workspace === activeWorkspace) {
+      const index = workspaces.indexOf(workspace);
+      const next = workspaces[index + 1] ?? workspaces[index - 1];
+      if (!next) return;
+      await switchToWorkspace(next);
+    }
+
+    for (const terminal of workspace.terminals) terminal.destroy();
+    workspace.terminals = [];
+    workspace.pending = [];
+    workspaces = workspaces.filter((entry) => entry !== workspace);
+
+    renderWorkspaceTabs();
+    updateStatus();
+    persist();
+  });
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case '"':
+        return "&quot;";
+      default:
+        return "&#39;";
+    }
+  });
 }
 
 /** O cabeçalho fica escondido e desce quando o mouse encosta no topo da tela. */
@@ -649,7 +1147,17 @@ function bindGlobalShortcuts(): void {
         canvas.zoomBy(1 / 1.1);
         return;
       }
-      if (mod && e.key.toLowerCase() === "t") {
+      if (mod && e.key === "Tab") {
+        own();
+        await cycleWorkspace(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === "t") {
+        own();
+        await createWorkspace();
+        return;
+      }
+      if (mod && !e.shiftKey && e.key.toLowerCase() === "t") {
         own();
         await addTerminalAtCenter();
         return;
@@ -795,33 +1303,24 @@ function trackMouseCoordinates(): void {
 }
 
 function persist(): void {
-  saveLayout(
-    { panX: canvas.panX, panY: canvas.panY, zoom: canvas.zoom },
-    canvas.getAllTerminals().map((t) => t.getState()),
-  );
-}
+  if (!activeWorkspace) return;
+  activeWorkspace.view = {
+    panX: canvas.panX,
+    panY: canvas.panY,
+    zoom: canvas.zoom,
+  };
 
-async function restoreLayout(): Promise<void> {
-  const layout = loadLayout();
-  if (!layout) return;
-
-  canvas.setView(layout.view.panX, layout.view.panY, layout.view.zoom);
-
-  for (const saved of layout.terminals) {
-    try {
-      await addTerminal(
-        saved.shell,
-        saved.x,
-        saved.y,
-        saved.w,
-        saved.h,
-        saved.cwd,
-        saved.title,
-      );
-    } catch {
-      // Continua restaurando os demais terminais.
-    }
-  }
+  saveWorkspaces({
+    activeId: activeWorkspace.id,
+    workspaces: workspaces.map((workspace) => ({
+      id: workspace.id,
+      name: workspace.name,
+      view: workspace.view,
+      terminals: workspace.initialized
+        ? workspace.terminals.map((terminal) => toSavedTerminal(terminal.getState()))
+        : workspace.pending,
+    })),
+  });
 }
 
 function bindContextMenu(): void {

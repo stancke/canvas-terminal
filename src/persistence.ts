@@ -1,6 +1,14 @@
 import type { TerminalState } from "./terminal-window";
 
-const STORAGE_KEY = "canvas-terminal.layout.v1";
+/**
+ * Layout com múltiplas áreas de trabalho (abas). Cada área guarda sua própria
+ * view (pan/zoom) e seus terminais.
+ *
+ * A chave antiga (`layout.v1`) é migrada automaticamente para uma única área.
+ */
+
+const STORAGE_KEY = "canvas-terminal.workspaces.v1";
+const LEGACY_KEY = "canvas-terminal.layout.v1";
 
 export interface SavedView {
   panX: number;
@@ -20,7 +28,24 @@ export interface SavedTerminal {
   geom?: SavedTerminal;
 }
 
-function cloneSavedTerminal(state: TerminalState): SavedTerminal {
+export interface SavedWorkspace {
+  id: string;
+  name: string;
+  view: SavedView;
+  terminals: SavedTerminal[];
+}
+
+export interface SavedWorkspaceLayout {
+  activeId: string;
+  workspaces: SavedWorkspace[];
+}
+
+interface LegacyLayout {
+  view: SavedView;
+  terminals: SavedTerminal[];
+}
+
+export function toSavedTerminal(state: TerminalState): SavedTerminal {
   return {
     x: state.x,
     y: state.y,
@@ -30,37 +55,157 @@ function cloneSavedTerminal(state: TerminalState): SavedTerminal {
     cwd: state.cwd,
     title: state.title,
     maximized: state.maximized,
-    geom: state.savedGeom ? cloneSavedTerminal(state.savedGeom) : undefined,
+    geom: state.savedGeom ? toSavedTerminal(state.savedGeom) : undefined,
   };
 }
 
-export interface SavedLayout {
-  view: SavedView;
-  terminals: SavedTerminal[];
+function makeId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `w${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  }
+}
+
+function isSavedView(value: unknown): value is SavedView {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.panX === "number" &&
+    Number.isFinite(v.panX) &&
+    typeof v.panY === "number" &&
+    Number.isFinite(v.panY) &&
+    typeof v.zoom === "number" &&
+    Number.isFinite(v.zoom)
+  );
+}
+
+function parseTerminals(value: unknown): SavedTerminal[] {
+  if (!Array.isArray(value)) return [];
+  const terminals: SavedTerminal[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const t = entry as Record<string, unknown>;
+    if (
+      typeof t.x !== "number" ||
+      typeof t.y !== "number" ||
+      typeof t.w !== "number" ||
+      typeof t.h !== "number"
+    ) {
+      continue;
+    }
+    terminals.push({
+      x: t.x,
+      y: t.y,
+      w: t.w,
+      h: t.h,
+      shell: typeof t.shell === "string" ? t.shell : "",
+      cwd: typeof t.cwd === "string" ? t.cwd : "",
+      title: typeof t.title === "string" ? t.title : "",
+      maximized: t.maximized === true,
+      geom:
+        typeof t.geom === "object" && t.geom !== null
+          ? parseTerminals([t.geom])[0]
+          : undefined,
+    });
+  }
+  return terminals;
+}
+
+function parseWorkspace(value: unknown, index: number): SavedWorkspace | null {
+  if (typeof value !== "object" || value === null) return null;
+  const w = value as Record<string, unknown>;
+  if (!isSavedView(w.view)) return null;
+  return {
+    id: typeof w.id === "string" && w.id ? w.id : makeId(),
+    name:
+      typeof w.name === "string" && w.name.trim()
+        ? w.name.trim()
+        : `Área ${index + 1}`,
+    view: w.view,
+    terminals: parseTerminals(w.terminals),
+  };
+}
+
+function parseWorkspaceLayout(value: unknown): SavedWorkspaceLayout | null {
+  if (typeof value !== "object" || value === null) return null;
+  const layout = value as Record<string, unknown>;
+  if (!Array.isArray(layout.workspaces)) return null;
+
+  const workspaces: SavedWorkspace[] = [];
+  layout.workspaces.forEach((entry, index) => {
+    const parsed = parseWorkspace(entry, index);
+    if (parsed) workspaces.push(parsed);
+  });
+  if (workspaces.length === 0) return null;
+
+  const activeId =
+    typeof layout.activeId === "string" &&
+    workspaces.some((w) => w.id === layout.activeId)
+      ? layout.activeId
+      : workspaces[0].id;
+
+  return { activeId, workspaces };
+}
+
+function migrateLegacy(): SavedWorkspaceLayout | null {
+  const raw = localStorage.getItem(LEGACY_KEY);
+  if (!raw) return null;
+  const legacy = JSON.parse(raw) as LegacyLayout;
+  if (!legacy || !isSavedView(legacy.view)) return null;
+  const id = makeId();
+  return {
+    activeId: id,
+    workspaces: [
+      {
+        id,
+        name: "Área 1",
+        view: legacy.view,
+        terminals: parseTerminals(legacy.terminals),
+      },
+    ],
+  };
 }
 
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+let pendingPayload: SavedWorkspaceLayout | null = null;
 
-export function saveLayout(view: SavedView, terminals: TerminalState[]): void {
+function writePending(): void {
+  if (!pendingPayload) return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(pendingPayload));
+  } catch {
+    // Ignora erros de quota/escrita.
+  }
+  pendingPayload = null;
+}
+
+export function saveWorkspaces(layout: SavedWorkspaceLayout): void {
+  pendingPayload = layout;
   if (saveTimeout) clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
-    const payload: SavedLayout = {
-      view,
-      terminals: terminals.map((t) => cloneSavedTerminal(t)),
-    };
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      // Ignora erros de quota/escrita.
-    }
+    saveTimeout = null;
+    writePending();
   }, 500);
 }
 
-export function loadLayout(): SavedLayout | null {
+/** Grava imediatamente o último layout pendente (antes de fechar o app). */
+export function flushSave(): void {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+  }
+  writePending();
+}
+
+export function loadWorkspaces(): SavedWorkspaceLayout | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as SavedLayout;
+    if (raw) {
+      const parsed = parseWorkspaceLayout(JSON.parse(raw));
+      if (parsed) return parsed;
+    }
+    return migrateLegacy();
   } catch {
     return null;
   }

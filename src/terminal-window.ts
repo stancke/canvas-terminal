@@ -59,6 +59,7 @@ export class TerminalWindow {
   private term: Terminal;
   private termBody: HTMLDivElement;
   private titleEl!: HTMLSpanElement;
+  private tabsEl!: HTMLDivElement;
   private overlay!: HTMLDivElement;
   private canvas: Canvas;
   private disposed = false;
@@ -136,7 +137,13 @@ export class TerminalWindow {
     this.bindKeyboard();
 
     onPtyData(id, (event) => this.onPtyEvent(event));
-    this.focus();
+    // O canvas avisa quando terminais são criados/removidos/trocados de área:
+    // a barra de abas do terminal maximizado se mantém atualizada.
+    document.addEventListener(
+      "canvas-terminals-changed",
+      () => this.renderHeaderTabs(),
+      { signal: this.listeners.signal },
+    );
     this.render(canvas.zoom);
     // O PTY nasce com 80x24; sincroniza com o tamanho real da janela assim
     // que ela entra no DOM.
@@ -155,6 +162,11 @@ export class TerminalWindow {
     this.titleEl.className = "term-name";
     this.titleEl.textContent = this.title;
     bar.appendChild(this.titleEl);
+
+    // Abas com os terminais da área: visíveis só quando a janela é maximizada.
+    this.tabsEl = document.createElement("div");
+    this.tabsEl.className = "term-tabs";
+    bar.appendChild(this.tabsEl);
 
     const controls = document.createElement("div");
     controls.className = "term-controls";
@@ -262,7 +274,9 @@ export class TerminalWindow {
     this.setupResize();
 
     this.element.addEventListener("dblclick", (e) => {
-      if ((e.target as HTMLElement).closest(".term-titlebar")) {
+      const target = e.target as HTMLElement;
+      if (target.closest(".term-tabs")) return;
+      if (target.closest(".term-titlebar")) {
         this.toggleMaximize();
       }
     });
@@ -354,6 +368,7 @@ export class TerminalWindow {
 
   render(zoom: number): void {
     this.currentZoom = zoom;
+    this.element.classList.toggle("maximized", this.maximized);
     // Uma janela maximizada acompanha o viewport também quando o zoom muda.
     if (this.maximized) {
       const rect = this.canvas.worldRectVisible();
@@ -398,6 +413,10 @@ export class TerminalWindow {
 
   /** Recalcula colunas/linhas após uma mudança de geometria externa. */
   refit(): void {
+    if (this.disposed) return;
+    // Garante que o xterm meça a célula agora que a janela está no DOM: uma
+    // área restaurada pode ter sido criada fora do documento.
+    this.term.refresh(0, Math.max(0, this.term.rows - 1));
     this.scheduleFit();
   }
 
@@ -417,14 +436,26 @@ export class TerminalWindow {
   }
 
   toggleMinimize(): void {
-    this.element.classList.toggle("minimized");
-    if (!this.element.classList.contains("minimized")) this.scheduleFit();
+    const nowMinimized = this.element.classList.toggle("minimized");
+    if (nowMinimized && this.maximized) {
+      // Minimizar uma janela maximizada devolve a geometria normal.
+      this.toggleMaximize();
+    }
+    if (!nowMinimized) this.scheduleFit();
   }
 
   toggleMaximize(): void {
     if (this.maximized) {
       this.restoreGeom();
     } else {
+      // Uma janela minimizada não pode ser maximizada enquanto o corpo está
+      // escondido.
+      this.element.classList.remove("minimized");
+      // Apenas um terminal maximizado por área de trabalho: restaura os demais
+      // para que as abas do cabeçalho funcionem como navegação.
+      for (const other of this.canvas.getAllTerminals()) {
+        if (other !== this && other.maximized) other.toggleMaximize();
+      }
       this.saveGeom();
       const rect = this.canvas.worldRectVisible();
       this.x = rect.x;
@@ -434,8 +465,56 @@ export class TerminalWindow {
       this.maximized = true;
     }
     this.render(this.canvas.zoom);
+    this.renderHeaderTabs();
     this.scheduleFit();
     this.onChange?.();
+  }
+
+  /** Monta as abas dos terminais da área no cabeçalho da janela maximizada. */
+  private renderHeaderTabs(): void {
+    if (!this.tabsEl) return;
+    this.tabsEl.innerHTML = "";
+    if (!this.maximized || !this.element.isConnected) return;
+
+    for (const terminal of this.canvas.getAllTerminals()) {
+      const tab = document.createElement("div");
+      tab.className = "term-tab" + (terminal === this ? " active" : "");
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-selected", String(terminal === this));
+      tab.tabIndex = 0;
+      tab.title = terminal.title;
+
+      const label = document.createElement("span");
+      label.className = "term-tab-name";
+      label.textContent = terminal.title;
+      tab.appendChild(label);
+
+      tab.addEventListener("mousedown", (event) => event.stopPropagation());
+      tab.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.activateWorkspaceTab(terminal);
+      });
+      tab.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          this.activateWorkspaceTab(terminal);
+        }
+      });
+      this.tabsEl.appendChild(tab);
+    }
+  }
+
+  /** Troca o terminal maximizado atual pelo escolhido na aba do cabeçalho. */
+  private activateWorkspaceTab(target: TerminalWindow): void {
+    if (target === this && this.maximized) {
+      this.focus();
+      return;
+    }
+    for (const terminal of this.canvas.getAllTerminals()) {
+      if (terminal !== target && terminal.maximized) terminal.toggleMaximize();
+    }
+    if (!target.maximized) target.toggleMaximize();
+    target.focus();
   }
 
   private saveGeom(): void {
@@ -465,28 +544,38 @@ export class TerminalWindow {
 
   /** Renomeia inline na barra de título (sem diálogo nativo do webview). */
   rename(): void {
-    if (this.titleEl.isContentEditable) return;
-    this.titleEl.contentEditable = "true";
-    this.titleEl.classList.add("editing");
-    this.titleEl.focus();
+    // Maximizado, o nome fica na aba ativa do cabeçalho; fora disso, no título.
+    const activeTabName = this.maximized
+      ? this.tabsEl.querySelector<HTMLElement>(".term-tab.active .term-tab-name")
+      : null;
+    const target = activeTabName ?? this.titleEl;
+    if (target.isContentEditable) return;
+
+    target.contentEditable = "true";
+    target.classList.add("editing");
+    target.focus();
 
     const range = document.createRange();
-    range.selectNodeContents(this.titleEl);
+    range.selectNodeContents(target);
     const selection = window.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(range);
 
     const finish = (commit: boolean) => {
-      this.titleEl.removeEventListener("keydown", onKey, true);
-      this.titleEl.removeEventListener("blur", onBlur, true);
-      const value = (this.titleEl.textContent || "").trim();
-      this.titleEl.contentEditable = "false";
-      this.titleEl.classList.remove("editing");
+      target.removeEventListener("keydown", onKey, true);
+      target.removeEventListener("blur", onBlur, true);
+      const value = (target.textContent || "").trim();
+      target.contentEditable = "false";
+      target.classList.remove("editing");
       if (commit && value) {
         this.title = value;
         this.onChange?.();
       }
       this.titleEl.textContent = this.title;
+      this.renderHeaderTabs();
+      if (commit && value) {
+        document.dispatchEvent(new CustomEvent("canvas-terminals-changed"));
+      }
       this.focus();
     };
     const onKey = (ev: KeyboardEvent) => {
@@ -501,8 +590,8 @@ export class TerminalWindow {
     };
     const onBlur = () => finish(true);
 
-    this.titleEl.addEventListener("keydown", onKey, true);
-    this.titleEl.addEventListener("blur", onBlur, true);
+    target.addEventListener("keydown", onKey, true);
+    target.addEventListener("blur", onBlur, true);
   }
 
   async restart(): Promise<void> {
@@ -536,6 +625,26 @@ export class TerminalWindow {
     }
   }
 
+  /**
+   * Encerra o PTY e descarta a janela sem disparar `onClose` (usado ao fechar
+   * uma área de trabalho inteira).
+   */
+  destroy(): void {
+    if (!this.disposed) {
+      this.disposed = true;
+      offPtyData(this.id);
+      void killTerminal(this.id).catch(() => {});
+      this.term.dispose();
+      this.unsubscribeTheme?.();
+    }
+    this.listeners.abort();
+    this.element.remove();
+    this.onClose = undefined;
+    this.onFocus = undefined;
+    this.onChange = undefined;
+    this.onRestart = undefined;
+  }
+
   getState(): TerminalState {
     return {
       id: this.id,
@@ -561,6 +670,7 @@ export class TerminalWindow {
 
     titlebar.addEventListener("mousedown", (e) => {
       if ((e.target as HTMLElement).closest(".term-controls")) return;
+      if ((e.target as HTMLElement).closest(".term-tabs")) return;
       if ((e.target as HTMLElement).isContentEditable) return;
       dragging = true;
       startX = e.clientX;
