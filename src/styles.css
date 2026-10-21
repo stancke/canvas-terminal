@@ -269,7 +269,7 @@ body {
 
 #workspace-tab-list {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   align-items: center;
   gap: 2px;
   min-width: 0;
@@ -638,6 +638,42 @@ body {
 
 .term-window.maximized .term-tabs {
   display: flex;
+}
+
+.term-tab-group {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: calc(3px * var(--z, 1));
+  padding-right: calc(7px * var(--z, 1));
+  margin-right: calc(3px * var(--z, 1));
+  border-right: 1px solid var(--window-border);
+}
+
+.term-tab-group:last-child {
+  padding-right: 0;
+  margin-right: 0;
+  border-right: none;
+}
+
+.term-tab-group-name {
+  flex: 0 0 auto;
+  max-width: calc(120px * var(--z, 1));
+  padding: 0 calc(2px * var(--z, 1));
+  color: var(--text-muted);
+  font-size: calc(9px * var(--z, 1));
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.7;
+}
+
+.term-tab-group.active-workspace .term-tab-group-name {
+  color: var(--accent);
+  opacity: 1;
 }
 
 .term-tab {

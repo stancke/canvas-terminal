@@ -4,6 +4,8 @@ import { Canvas } from "./canvas";
 import {
   createTerminal,
   TerminalWindow,
+  type TerminalTabGroup,
+  type TerminalTabRef,
 } from "./terminal-window";
 import {
   defaultCwd,
@@ -42,6 +44,8 @@ interface Workspace {
   pending: SavedTerminal[];
   initialized: boolean;
   lastFocusedId?: number;
+  /** Índice do terminal focado, persistido para reabrir no mesmo. */
+  focusedIndex?: number;
 }
 
 let canvas: Canvas;
@@ -73,11 +77,30 @@ async function main(): Promise<void> {
   await initPtyListener();
   // Uma recarga do webview deixaria os PTYs antigos órfãos: limpa antes de restaurar.
   await killAllTerminals().catch(() => 0);
-  window.addEventListener("beforeunload", () => {
+  const saveSession = () => {
     persist();
     flushSave();
+  };
+  window.addEventListener("beforeunload", () => {
+    saveSession();
     void killAllTerminals().catch(() => 0);
   });
+  window.addEventListener("pagehide", saveSession);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") saveSession();
+  });
+
+  // Garantia extra no Tauri: salva antes de a janela ser fechada.
+  if (isTauri()) {
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        await getCurrentWindow().onCloseRequested(() => saveSession());
+      } catch {
+        // Sem permissão/indisponível: beforeunload/pagehide continuam valendo.
+      }
+    })();
+  }
 
   canvas = new Canvas("#viewport", "#world");
   canvas.onEmptyContextMenu = showEmptyContextMenu;
@@ -169,6 +192,8 @@ async function createTerminalForWorkspace(
   terminal.onFocus = (id) => {
     focusedTerminal = terminal;
     workspace.lastFocusedId = id;
+    const index = workspace.terminals.findIndex((entry) => entry.id === id);
+    if (index >= 0) workspace.focusedIndex = index;
   };
   terminal.onClose = () => {
     workspace.terminals = workspace.terminals.filter((entry) => entry !== terminal);
@@ -180,7 +205,14 @@ async function createTerminalForWorkspace(
       workspace.lastFocusedId =
         workspace.terminals[workspace.terminals.length - 1]?.id;
     }
+    const focusedIndex = workspace.terminals.findIndex(
+      (entry) => entry.id === workspace.lastFocusedId,
+    );
+    workspace.focusedIndex = focusedIndex >= 0 ? focusedIndex : undefined;
     renderWorkspaceTabs();
+    // Atualiza as abas agrupadas do terminal maximizado (inclusive grupos de
+    // áreas que não estão ativas).
+    notifyTerminalTabsChanged();
     persist();
     updateStatus();
   };
@@ -200,6 +232,8 @@ async function createTerminalForWorkspace(
     persist();
     updateStatus();
   };
+  terminal.onRequestTerminalTabs = () => terminalTabGroups();
+  terminal.onSelectTerminalTab = (ref) => void selectTerminalTab(ref);
 
   return terminal;
 }
@@ -678,6 +712,7 @@ function makeWorkspace(name?: string, view?: SavedView): Workspace {
     pending: [],
     initialized: true,
     lastFocusedId: undefined,
+    focusedIndex: undefined,
   };
 }
 
@@ -690,6 +725,7 @@ function savedToWorkspace(saved: SavedWorkspace): Workspace {
     pending: saved.terminals,
     initialized: false,
     lastFocusedId: undefined,
+    focusedIndex: saved.focusedIndex,
   };
 }
 
@@ -725,8 +761,12 @@ async function instantiateWorkspace(workspace: Workspace): Promise<void> {
           w: item.geom.w,
           h: item.geom.h,
           maximized: false,
+          minimized: false,
         };
         terminal.maximized = true;
+      }
+      if (item.minimized && !item.maximized) {
+        terminal.element.classList.add("minimized");
       }
       workspace.terminals.push(terminal);
     } catch {
@@ -744,8 +784,13 @@ async function showWorkspace(workspace: Workspace): Promise<void> {
   canvas.attachTerminals(workspace.terminals);
 
   const maximized = workspace.terminals.find((terminal) => terminal.maximized);
+  const preferred =
+    workspace.focusedIndex !== undefined
+      ? workspace.terminals[workspace.focusedIndex]
+      : undefined;
   focusedTerminal =
     maximized ??
+    preferred ??
     workspace.terminals.find((terminal) => terminal.id === workspace.lastFocusedId) ??
     workspace.terminals[0] ??
     null;
@@ -818,6 +863,7 @@ async function createWorkspace(): Promise<void> {
     const workspace = makeWorkspace(undefined, { panX: 0, panY: 0, zoom: 1 });
     workspaces.push(workspace);
     renderWorkspaceTabs();
+    notifyTerminalTabsChanged();
     await switchToWorkspace(workspace);
     await addTerminalAtCenter();
     persist();
@@ -831,10 +877,83 @@ async function cycleWorkspace(direction: number): Promise<void> {
   await activateWorkspace(next.id);
 }
 
+function notifyTerminalTabsChanged(): void {
+  document.dispatchEvent(new CustomEvent("canvas-terminals-changed"));
+}
+
+/** Grupos exibidos nas abas do terminal maximizado: todas as áreas. */
+function terminalTabGroups(): TerminalTabGroup[] {
+  return workspaces
+    .map((workspace) => {
+      const isActive = workspace === activeWorkspace;
+      const terminals: TerminalTabRef[] = workspace.initialized
+        ? workspace.terminals.map((terminal) => ({
+            workspaceId: workspace.id,
+            terminalId: terminal.id,
+            label: terminal.title,
+          }))
+        : workspace.pending.map((saved, index) => ({
+            workspaceId: workspace.id,
+            pendingIndex: index,
+            label: saved.title || `Terminal ${index + 1}`,
+          }));
+
+      return {
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
+        activeWorkspace: isActive,
+        terminals,
+      };
+    })
+    .filter((group) => group.terminals.length > 0);
+}
+
+/** Clicou numa aba do terminal maximizado: troca de área e maximiza o alvo. */
+async function selectTerminalTab(ref: TerminalTabRef): Promise<void> {
+  const workspace = workspaces.find((entry) => entry.id === ref.workspaceId);
+  if (!workspace) return;
+
+  await withWorkspaceLock(async () => {
+    if (workspace !== activeWorkspace) {
+      await switchToWorkspace(workspace);
+    }
+
+    let target: TerminalWindow | undefined;
+    if (ref.terminalId !== undefined) {
+      target = workspace.terminals.find((terminal) => terminal.id === ref.terminalId);
+    } else if (ref.pendingIndex !== undefined) {
+      target = workspace.terminals[ref.pendingIndex];
+    }
+    if (!target) {
+      target = workspace.terminals.find((terminal) => terminal.maximized);
+    }
+    if (!target) target = workspace.terminals[0];
+    if (!target) return;
+
+    for (const terminal of workspace.terminals) {
+      if (terminal !== target && terminal.maximized) terminal.toggleMaximize();
+    }
+    if (!target.maximized) target.toggleMaximize();
+    target.focus();
+    persist();
+  });
+}
+
 function bindWorkspaceTabs(): void {
   document.getElementById("workspace-add")?.addEventListener("click", () => {
     void createWorkspace();
   });
+
+  const list = document.getElementById("workspace-tab-list");
+  list?.addEventListener(
+    "wheel",
+    (event) => {
+      if (event.ctrlKey || list.scrollWidth <= list.clientWidth) return;
+      list.scrollLeft += event.deltaY || event.deltaX;
+      event.preventDefault();
+    },
+    { passive: false },
+  );
 }
 
 function renderWorkspaceTabs(): void {
@@ -913,6 +1032,7 @@ function startWorkspaceRename(workspace: Workspace, nameEl: HTMLElement): void {
     nameEl.classList.remove("editing");
     if (commit && value) workspace.name = value;
     renderWorkspaceTabs();
+    notifyTerminalTabsChanged();
     persist();
   };
   const onKey = (event: KeyboardEvent) => {
@@ -968,6 +1088,7 @@ async function removeWorkspace(workspace: Workspace): Promise<void> {
     workspaces = workspaces.filter((entry) => entry !== workspace);
 
     renderWorkspaceTabs();
+    notifyTerminalTabsChanged();
     updateStatus();
     persist();
   });
@@ -1312,14 +1433,24 @@ function persist(): void {
 
   saveWorkspaces({
     activeId: activeWorkspace.id,
-    workspaces: workspaces.map((workspace) => ({
-      id: workspace.id,
-      name: workspace.name,
-      view: workspace.view,
-      terminals: workspace.initialized
-        ? workspace.terminals.map((terminal) => toSavedTerminal(terminal.getState()))
-        : workspace.pending,
-    })),
+    workspaces: workspaces.map((workspace) => {
+      let focusedIndex = workspace.focusedIndex;
+      if (workspace.initialized) {
+        const index = workspace.terminals.findIndex(
+          (terminal) => terminal.id === workspace.lastFocusedId,
+        );
+        if (index >= 0) focusedIndex = index;
+      }
+      return {
+        id: workspace.id,
+        name: workspace.name,
+        view: workspace.view,
+        focusedIndex,
+        terminals: workspace.initialized
+          ? workspace.terminals.map((terminal) => toSavedTerminal(terminal.getState()))
+          : workspace.pending,
+      };
+    }),
   });
 }
 

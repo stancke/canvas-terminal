@@ -25,6 +25,7 @@ export interface SavedTerminal {
   cwd: string;
   title: string;
   maximized: boolean;
+  minimized: boolean;
   geom?: SavedTerminal;
 }
 
@@ -33,6 +34,8 @@ export interface SavedWorkspace {
   name: string;
   view: SavedView;
   terminals: SavedTerminal[];
+  /** Índice do terminal que estava em foco ao sair (para reabrir no mesmo). */
+  focusedIndex?: number;
 }
 
 export interface SavedWorkspaceLayout {
@@ -55,6 +58,7 @@ export function toSavedTerminal(state: TerminalState): SavedTerminal {
     cwd: state.cwd,
     title: state.title,
     maximized: state.maximized,
+    minimized: state.minimized,
     geom: state.savedGeom ? toSavedTerminal(state.savedGeom) : undefined,
   };
 }
@@ -103,6 +107,7 @@ function parseTerminals(value: unknown): SavedTerminal[] {
       cwd: typeof t.cwd === "string" ? t.cwd : "",
       title: typeof t.title === "string" ? t.title : "",
       maximized: t.maximized === true,
+      minimized: t.minimized === true,
       geom:
         typeof t.geom === "object" && t.geom !== null
           ? parseTerminals([t.geom])[0]
@@ -116,6 +121,12 @@ function parseWorkspace(value: unknown, index: number): SavedWorkspace | null {
   if (typeof value !== "object" || value === null) return null;
   const w = value as Record<string, unknown>;
   if (!isSavedView(w.view)) return null;
+  const focusedIndex =
+    typeof w.focusedIndex === "number" &&
+    Number.isInteger(w.focusedIndex) &&
+    w.focusedIndex >= 0
+      ? w.focusedIndex
+      : undefined;
   return {
     id: typeof w.id === "string" && w.id ? w.id : makeId(),
     name:
@@ -123,6 +134,7 @@ function parseWorkspace(value: unknown, index: number): SavedWorkspace | null {
         ? w.name.trim()
         : `Área ${index + 1}`,
     view: w.view,
+    focusedIndex,
     terminals: parseTerminals(w.terminals),
   };
 }

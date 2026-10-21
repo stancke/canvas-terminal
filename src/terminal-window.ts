@@ -22,7 +22,25 @@ export interface TerminalState {
   w: number;
   h: number;
   maximized: boolean;
+  minimized: boolean;
   savedGeom?: TerminalState;
+}
+
+/** Referência a um terminal exibido nas abas do cabeçalho maximizado. */
+export interface TerminalTabRef {
+  workspaceId: string;
+  terminalId?: number;
+  /** Índice no layout salvo quando a área ainda não foi instanciada. */
+  pendingIndex?: number;
+  label: string;
+}
+
+/** Grupo de terminais de uma área de trabalho. */
+export interface TerminalTabGroup {
+  workspaceId: string;
+  workspaceName: string;
+  activeWorkspace: boolean;
+  terminals: TerminalTabRef[];
 }
 
 const MIN_W = 240;
@@ -78,6 +96,10 @@ export class TerminalWindow {
   onClose?: (id: number) => void;
   onRestart?: (state: TerminalState) => void;
   onChange?: () => void;
+  /** Fornece os grupos (áreas de trabalho) para as abas do modo maximizado. */
+  onRequestTerminalTabs?: () => TerminalTabGroup[];
+  /** Chamado ao clicar em uma aba de qualquer área de trabalho. */
+  onSelectTerminalTab?: (ref: TerminalTabRef) => void;
 
   constructor(
     canvas: Canvas,
@@ -166,6 +188,16 @@ export class TerminalWindow {
     // Abas com os terminais da área: visíveis só quando a janela é maximizada.
     this.tabsEl = document.createElement("div");
     this.tabsEl.className = "term-tabs";
+    this.tabsEl.addEventListener(
+      "wheel",
+      (event) => {
+        if (event.ctrlKey || !this.maximized) return;
+        this.tabsEl.scrollLeft += event.deltaY || event.deltaX;
+        event.preventDefault();
+        event.stopPropagation();
+      },
+      { passive: false },
+    );
     bar.appendChild(this.tabsEl);
 
     const controls = document.createElement("div");
@@ -470,51 +502,64 @@ export class TerminalWindow {
     this.onChange?.();
   }
 
-  /** Monta as abas dos terminais da área no cabeçalho da janela maximizada. */
+  /** Monta as abas agrupadas por área no cabeçalho da janela maximizada. */
   private renderHeaderTabs(): void {
     if (!this.tabsEl) return;
     this.tabsEl.innerHTML = "";
     if (!this.maximized || !this.element.isConnected) return;
 
-    for (const terminal of this.canvas.getAllTerminals()) {
-      const tab = document.createElement("div");
-      tab.className = "term-tab" + (terminal === this ? " active" : "");
-      tab.setAttribute("role", "tab");
-      tab.setAttribute("aria-selected", String(terminal === this));
-      tab.tabIndex = 0;
-      tab.title = terminal.title;
+    const groups = this.onRequestTerminalTabs?.() ?? [];
+    for (const group of groups) {
+      if (group.terminals.length === 0) continue;
 
-      const label = document.createElement("span");
-      label.className = "term-tab-name";
-      label.textContent = terminal.title;
-      tab.appendChild(label);
+      const groupEl = document.createElement("div");
+      groupEl.className =
+        "term-tab-group" + (group.activeWorkspace ? " active-workspace" : "");
 
-      tab.addEventListener("mousedown", (event) => event.stopPropagation());
-      tab.addEventListener("click", (event) => {
-        event.stopPropagation();
-        this.activateWorkspaceTab(terminal);
-      });
-      tab.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          this.activateWorkspaceTab(terminal);
-        }
-      });
-      this.tabsEl.appendChild(tab);
-    }
-  }
+      const groupName = document.createElement("span");
+      groupName.className = "term-tab-group-name";
+      groupName.textContent = group.workspaceName;
+      groupName.title = group.workspaceName;
+      groupEl.appendChild(groupName);
 
-  /** Troca o terminal maximizado atual pelo escolhido na aba do cabeçalho. */
-  private activateWorkspaceTab(target: TerminalWindow): void {
-    if (target === this && this.maximized) {
-      this.focus();
-      return;
+      for (const ref of group.terminals) {
+        const tab = document.createElement("div");
+        tab.className =
+          "term-tab" +
+          (ref.terminalId !== undefined && ref.terminalId === this.id ? " active" : "");
+        tab.setAttribute("role", "tab");
+        tab.setAttribute(
+          "aria-selected",
+          String(ref.terminalId !== undefined && ref.terminalId === this.id),
+        );
+        tab.tabIndex = 0;
+        tab.title = ref.label;
+
+        const label = document.createElement("span");
+        label.className = "term-tab-name";
+        label.textContent = ref.label;
+        tab.appendChild(label);
+
+        tab.addEventListener("mousedown", (event) => event.stopPropagation());
+        tab.addEventListener("click", (event) => {
+          event.stopPropagation();
+          this.onSelectTerminalTab?.(ref);
+        });
+        tab.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            this.onSelectTerminalTab?.(ref);
+          }
+        });
+        groupEl.appendChild(tab);
+      }
+
+      this.tabsEl.appendChild(groupEl);
     }
-    for (const terminal of this.canvas.getAllTerminals()) {
-      if (terminal !== target && terminal.maximized) terminal.toggleMaximize();
-    }
-    if (!target.maximized) target.toggleMaximize();
-    target.focus();
+
+    this.tabsEl
+      .querySelector<HTMLElement>(".term-tab.active")
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
   private saveGeom(): void {
@@ -528,6 +573,7 @@ export class TerminalWindow {
       w: this.w,
       h: this.h,
       maximized: false,
+      minimized: false,
     };
   }
 
@@ -656,6 +702,7 @@ export class TerminalWindow {
       w: this.w,
       h: this.h,
       maximized: this.maximized,
+      minimized: this.element.classList.contains("minimized"),
       savedGeom: this.savedGeom,
     };
   }

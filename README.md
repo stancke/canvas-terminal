@@ -128,9 +128,14 @@ trocar de aba.
 - O menu **Janela** também traz essas ações.
 
 Quando um terminal está **maximizado**, o cabeçalho dele vira uma barra de abas
-com os nomes de todos os terminais daquela área. Clique em um nome para trazer
-outro terminal para a visão maximizada. Fora do modo maximizado, a visão normal
-do canvas é mantida.
+**agrupada por área de trabalho**. Cada grupo mostra os terminais daquela área;
+clique em qualquer nome para trocar de área e maximizar aquele terminal, mesmo
+que ele esteja em outra área (inclusive uma que ainda não tinha sido aberta nesta
+sessão). Fora do modo maximizado, a visão normal do canvas é mantida.
+
+Ao fechar o aplicativo, o perfil completo é salvo automaticamente: áreas,
+nomes, posição, tamanho, estado minimizado/maximizado, zoom, pan, terminal em
+foco e qual área estava ativa. Ao abrir novamente, tudo volta como estava.
 
 ---
 
@@ -202,8 +207,9 @@ As cores ficam em variáveis CSS em `src/styles.css` (`:root` = escuro,
 
 ## Preferências
 
-O layout de todas as áreas de trabalho (abas, terminais, posição e zoom) é
-salvo automaticamente em:
+O perfil de todas as áreas de trabalho (abas, nomes, terminais, posição,
+tamanho, estado minimizado/maximizado, zoom, pan, foco e área ativa) é salvo
+automaticamente em:
 
 ```
 localStorage["canvas-terminal.workspaces.v1"]
