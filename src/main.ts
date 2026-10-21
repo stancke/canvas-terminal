@@ -78,8 +78,13 @@ async function main(): Promise<void> {
   // Uma recarga do webview deixaria os PTYs antigos órfãos: limpa antes de restaurar.
   await killAllTerminals().catch(() => 0);
   const saveSession = () => {
-    persist();
-    flushSave();
+    try {
+      persist();
+      flushSave();
+    } catch (err) {
+      // Nunca deixa uma falha de persistência bloquear o fechamento.
+      console.error("Falha ao salvar o perfil:", err);
+    }
   };
   window.addEventListener("beforeunload", () => {
     saveSession();
@@ -89,18 +94,6 @@ async function main(): Promise<void> {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") saveSession();
   });
-
-  // Garantia extra no Tauri: salva antes de a janela ser fechada.
-  if (isTauri()) {
-    void (async () => {
-      try {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
-        await getCurrentWindow().onCloseRequested(() => saveSession());
-      } catch {
-        // Sem permissão/indisponível: beforeunload/pagehide continuam valendo.
-      }
-    })();
-  }
 
   canvas = new Canvas("#viewport", "#world");
   canvas.onEmptyContextMenu = showEmptyContextMenu;
@@ -451,13 +444,33 @@ function showAboutDialog(): void {
 }
 
 async function quitApp(): Promise<void> {
-  if (isTauri()) {
-    await killAllTerminals().catch(() => 0);
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    await getCurrentWindow().close();
+  try {
+    persist();
+    flushSave();
+  } catch (err) {
+    console.error("Falha ao salvar o perfil antes de sair:", err);
+  }
+
+  if (!isTauri()) {
+    window.close();
     return;
   }
-  window.close();
+
+  try {
+    await killAllTerminals().catch(() => 0);
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const win = getCurrentWindow();
+    void win.close().catch(() => {
+      void win.destroy().catch(() => {});
+    });
+    // Se algo impedir o fechamento normal, força a destruição da janela.
+    setTimeout(() => {
+      void win.destroy().catch(() => {});
+    }, 1500);
+  } catch (err) {
+    console.error("Falha ao fechar o aplicativo:", err);
+    window.close();
+  }
 }
 
 /* ---- Comandos rápidos ---- */
