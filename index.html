@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Canvas Terminal</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <header id="toolbar">
+      <span class="app-title">Canvas Terminal</span>
+      <div class="toolbar-group">
+        <button id="btn-new-terminal" title="Novo terminal (Ctrl+T)">
+          + Novo terminal
+        </button>
+        <select id="shell-select" title="Shell padrão para novos terminais"></select>
+        <button id="btn-organize" title="Organizar terminais visíveis (Ctrl+Shift+O)">
+          Organizar
+        </button>
+        <button id="btn-center" title="Centralizar vista (Ctrl+Home)">Centralizar</button>
+        <button id="btn-reset-zoom" title="Resetar zoom (Ctrl+0)">
+          Resetar zoom
+        </button>
+      </div>
+      <div class="toolbar-status">
+        <span id="zoom-indicator" title="Zoom atual">100%</span>
+        <span id="terminal-count" title="Terminais abertos">0</span>
+      </div>
+    </header>
+
+    <main id="viewport">
+      <div id="world"></div>
+      <div id="context-menu" class="hidden"></div>
+    </main>
+
+    <footer id="statusbar">
+      <span id="coords">0, 0</span>
+      <span id="hint">Espaço+arrastar para pan • Ctrl+roda para zoom</span>
+    </footer>
+  </body>
+</html>
