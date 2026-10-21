@@ -91,21 +91,66 @@ Os pacotes ficarão em `src-tauri/target/release/bundle/` (subpastas `deb/`, `rp
 
 ---
 
+## Interface
+
+O cabeçalho é uma barra de menus com as categorias **Arquivo**, **Exibir**,
+**Janela** e **Ajuda**. Ele fica escondido para deixar mais espaço ao canvas e
+desce automaticamente quando o mouse encosta no topo da tela (ou quando algum
+item recebe foco pelo teclado).
+
+Use **Exibir → Tela cheia** (`F11`) para esconder a moldura da janela, a barra
+de tarefas do sistema e a barra de status. O cabeçalho também fica oculto, mas
+continua disponível: encoste o mouse no topo da tela para ele descer. Para sair
+da tela cheia use **F11**/`Ctrl+Shift+F`, o botão **⛶** no cabeçalho ou o item
+**Exibir → Sair da tela cheia**; `Esc` não sai do fullscreen.
+
+O zoom é uniforme: janelas, barra de título, controles e o texto dos terminais
+escalam juntos, sem reflow do conteúdo. Vá de 25% a 300% com `Ctrl + roda do
+mouse`, `Ctrl+=` / `Ctrl+-` ou pelo menu **Exibir**.
+
+Para navegar sem o mouse, clique em uma área vazia do canvas e use **WASD** ou
+as **setas** (segure para pan contínuo). Clicar em um terminal devolve o foco ao
+shell.
+
+---
+
+## Comandos rápidos
+
+O painel translúcido no canto inferior esquerdo guarda seus comandos favoritos.
+Clique em **+**, dê um nome (opcional) e informe o comando. Marque **Executar
+depois de colar** se quiser que o `Enter` seja enviado automaticamente; sem a
+marca, o comando é apenas colado no terminal em foco para você confirmar.
+
+- O painel pode ser recolhido pelo botão `▾` (o estado é lembrado).
+- Comandos marcados para executar exibem um `↵` na lista.
+- Clique no lápis **✎** para editar: o formulário abre preenchido e o botão
+  passa a ser **Atualizar**.
+- Para remover um comando, clique em `×`.
+- Os comandos ficam salvos em `localStorage["canvas-terminal.quick-commands.v1"]`.
+- Em tela cheia o painel continua visível e se reposiciona acima da borda.
+
+---
+
 ## Atalhos
 
 | Atalho | Ação |
 |--------|------|
 | `Ctrl+T` (ou `Cmd+T`) | Novo terminal no centro do viewport |
+| `Ctrl+Q` (ou `Cmd+Q`) | Sair do aplicativo |
 | `Ctrl+Shift+W` (ou `Cmd+Shift+W`) | Fechar terminal em foco (funciona com o terminal focado) |
 | `Ctrl+W` com o terminal em foco | Vai para o shell (apaga a palavra anterior); fora dele, fecha o terminal |
 | `Ctrl+PageDown` / `Ctrl+PageUp` | Ciclar foco entre terminais |
-| `Ctrl+0` (ou `Cmd+0`) | Resetar zoom |
+| `Ctrl+0` (ou `Cmd+0`) | Resetar zoom (100%, ancorado no centro) |
+| `Ctrl+=` / `Ctrl+-` | Aumentar / diminuir o zoom |
+| `F11` / `Ctrl+Shift+F` | Alternar tela cheia (só sai por aqui ou pelo menu) |
+| `Esc` | Fechar menu ou diálogo |
 | `Ctrl+Shift+L` (ou `Cmd+Shift+L`) | Alternar tema claro/escuro |
 | `Ctrl+Shift+V` / `Ctrl+V` (ou `Cmd+Shift+V` / `Cmd+V`) | Colar no terminal |
 | `Ctrl+C` (ou `Cmd+C`) com seleção | Copiar do terminal |
 | `F2` | Renomear título do terminal |
 | `Espaço + arrastar` | Pan do canvas |
 | `Botão do meio` / `botão direito` | Pan do canvas |
+| `WASD` / setas | Navegar no canvas (clique antes em uma área vazia) |
 | `Ctrl + roda do mouse` | Zoom no cursor |
 | `Shift + roda do mouse` | Pan horizontal |
 
@@ -113,9 +158,9 @@ Os pacotes ficarão em `src-tauri/target/release/bundle/` (subpastas `deb/`, `rp
 
 ## Tema (claro / escuro)
 
-O app tem dois temas completos. Escolha em **Tema claro / Tema escuro** na barra
-superior ou com `Ctrl+Shift+L` — a troca é imediata, inclusive no conteúdo dos
-terminais (a paleta do xterm.js é reaplicada nos terminais já abertos).
+O app tem dois temas completos. Escolha em **Exibir → Tema claro/escuro** ou
+com `Ctrl+Shift+L` — a troca é imediata, inclusive no conteúdo dos terminais
+(a paleta do xterm.js é reaplicada nos terminais já abertos).
 
 Sem escolha explícita, o app **segue o tema do sistema operacional**
 (`prefers-color-scheme`); a escolha manual é lembrada em:

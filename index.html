@@ -28,36 +28,174 @@
   <body>
     <header id="toolbar">
       <span class="app-title">Canvas Terminal</span>
+
+      <nav id="menubar" aria-label="Menu principal">
+        <div class="menu">
+          <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false">
+            Arquivo
+          </button>
+          <div class="menu-dropdown" role="menu">
+            <button class="menu-item" id="menu-new" role="menuitem">
+              <span class="menu-label">Novo terminal</span>
+              <span class="menu-shortcut">Ctrl+T</span>
+            </button>
+            <button class="menu-item" id="menu-close-terminal" role="menuitem">
+              <span class="menu-label">Fechar terminal</span>
+              <span class="menu-shortcut">Ctrl+Shift+W</span>
+            </button>
+            <div class="menu-separator"></div>
+            <button class="menu-item" id="menu-quit" role="menuitem">
+              <span class="menu-label">Sair</span>
+              <span class="menu-shortcut">Ctrl+Q</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="menu">
+          <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false">
+            Exibir
+          </button>
+          <div class="menu-dropdown" role="menu">
+            <button class="menu-item" id="menu-theme" role="menuitem">
+              <span class="menu-label">Tema escuro</span>
+              <span class="menu-shortcut">Ctrl+Shift+L</span>
+            </button>
+            <div class="menu-separator"></div>
+            <button class="menu-item" id="menu-reset-zoom" role="menuitem">
+              <span class="menu-label">Resetar zoom</span>
+              <span class="menu-shortcut">Ctrl+0</span>
+            </button>
+            <button class="menu-item" id="menu-center" role="menuitem">
+              <span class="menu-label">Centralizar vista</span>
+            </button>
+            <button class="menu-item" id="menu-fullscreen" role="menuitem">
+              <span class="menu-label">Tela cheia</span>
+              <span class="menu-shortcut">F11</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="menu">
+          <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false">
+            Janela
+          </button>
+          <div class="menu-dropdown" role="menu">
+            <button class="menu-item" id="menu-organize" role="menuitem">
+              <span class="menu-label">Organizar terminais</span>
+              <span class="menu-shortcut">Ctrl+Shift+O</span>
+            </button>
+            <button class="menu-item" id="menu-cycle" role="menuitem">
+              <span class="menu-label">Próximo terminal</span>
+              <span class="menu-shortcut">Ctrl+PageDown</span>
+            </button>
+            <div class="menu-separator"></div>
+            <button class="menu-item" id="menu-maximize" role="menuitem">
+              <span class="menu-label">Maximizar / restaurar</span>
+            </button>
+            <button class="menu-item" id="menu-minimize" role="menuitem">
+              <span class="menu-label">Minimizar terminal</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="menu">
+          <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false">
+            Ajuda
+          </button>
+          <div class="menu-dropdown" role="menu">
+            <button class="menu-item" id="menu-shortcuts" role="menuitem">
+              <span class="menu-label">Atalhos de teclado</span>
+            </button>
+            <button class="menu-item" id="menu-about" role="menuitem">
+              <span class="menu-label">Sobre o Canvas Terminal</span>
+            </button>
+          </div>
+        </div>
+      </nav>
+
       <div class="toolbar-group">
-        <button id="btn-new-terminal" title="Novo terminal (Ctrl+T)">
-          + Novo terminal
-        </button>
+        <label class="shell-label" for="shell-select">Shell</label>
         <select id="shell-select" title="Shell padrão para novos terminais"></select>
-        <button id="btn-organize" title="Organizar terminais visíveis (Ctrl+Shift+O)">
-          Organizar
-        </button>
-        <button id="btn-center" title="Centralizar vista (Ctrl+Home)">Centralizar</button>
-        <button id="btn-reset-zoom" title="Resetar zoom (Ctrl+0)">
-          Resetar zoom
-        </button>
-        <button id="btn-theme" title="Alternar tema claro/escuro (Ctrl+Shift+L)">
-          Tema escuro
+        <button
+          id="btn-fullscreen"
+          class="toolbar-icon"
+          type="button"
+          title="Tela cheia (F11)"
+          aria-label="Alternar tela cheia"
+          aria-pressed="false"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            />
+          </svg>
         </button>
       </div>
+
       <div class="toolbar-status">
         <span id="zoom-indicator" title="Zoom atual">100%</span>
         <span id="terminal-count" title="Terminais abertos">0</span>
       </div>
     </header>
 
-    <main id="viewport">
+    <div id="toolbar-hotzone" title="Mostrar barra de ferramentas"></div>
+
+    <div id="app-dialog" class="hidden" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <div class="dialog-card">
+        <div class="dialog-header">
+          <span id="dialog-title"></span>
+          <button id="dialog-close" type="button" title="Fechar (Esc)">×</button>
+        </div>
+        <div id="dialog-body" class="dialog-body"></div>
+      </div>
+    </div>
+
+    <main id="viewport" tabindex="-1">
       <div id="world"></div>
       <div id="context-menu" class="hidden"></div>
     </main>
 
+    <aside id="quick-panel" aria-label="Comandos rápidos">
+      <div class="quick-header">
+        <button id="quick-toggle" class="quick-icon" type="button" title="Recolher / expandir">
+          ▾
+        </button>
+        <span class="quick-title">Comandos rápidos</span>
+        <button id="quick-add" class="quick-icon" type="button" title="Adicionar comando">
+          +
+        </button>
+      </div>
+      <form id="quick-form" class="hidden" autocomplete="off">
+        <input id="quick-label" type="text" maxlength="80" placeholder="Nome (opcional)" />
+        <input
+          id="quick-command"
+          type="text"
+          maxlength="2000"
+          placeholder="Comando (ex.: git status)"
+          required
+        />
+        <label class="quick-check">
+          <input id="quick-execute" type="checkbox" />
+          <span>Executar depois de colar</span>
+        </label>
+        <div class="quick-form-actions">
+          <button type="submit">Salvar</button>
+          <button type="button" id="quick-cancel">Cancelar</button>
+        </div>
+      </form>
+      <div id="quick-list" class="quick-list"></div>
+      <p id="quick-empty" class="quick-empty">
+        Clique em <strong>+</strong> para salvar seu primeiro comando.
+      </p>
+    </aside>
+
     <footer id="statusbar">
       <span id="coords">0, 0</span>
-      <span id="hint">Espaço+arrastar para pan • Ctrl+roda para zoom</span>
+      <span id="hint">Clique no canvas: WASD/setas navegam • Espaço+arrastar pan • Ctrl+roda zoom</span>
     </footer>
   </body>
 </html>

@@ -1,5 +1,4 @@
 import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import {
   killTerminal,
@@ -28,6 +27,8 @@ export interface TerminalState {
 
 const MIN_W = 240;
 const MIN_H = 140;
+/** Tamanho da fonte do terminal em zoom 100%. */
+const BASE_FONT_SIZE = 13;
 
 /** Exibe um aviso temporário na barra de status do app. */
 function warnClipboard(message: string): void {
@@ -56,7 +57,6 @@ export class TerminalWindow {
   savedGeom?: TerminalState;
 
   private term: Terminal;
-  private fitAddon: FitAddon;
   private termBody: HTMLDivElement;
   private titleEl!: HTMLSpanElement;
   private overlay!: HTMLDivElement;
@@ -66,6 +66,8 @@ export class TerminalWindow {
   private fitThrottle: ReturnType<typeof setTimeout> | null = null;
   private lastCols = 0;
   private lastRows = 0;
+  private currentFontSize = BASE_FONT_SIZE;
+  private currentZoom = 1;
   /** Remove os listeners de janela (drag/resize) quando a janela morre. */
   private listeners = new AbortController();
   /** Cancela a inscrição nas mudanças de tema (xterm). */
@@ -126,8 +128,6 @@ export class TerminalWindow {
       if (!this.disposed) this.term.options.theme = terminalPalette();
     });
 
-    this.fitAddon = new FitAddon();
-    this.term.loadAddon(this.fitAddon);
     this.term.loadAddon(new WebLinksAddon());
 
     this.term.open(this.termBody);
@@ -138,6 +138,9 @@ export class TerminalWindow {
     onPtyData(id, (event) => this.onPtyEvent(event));
     this.focus();
     this.render(canvas.zoom);
+    // O PTY nasce com 80x24; sincroniza com o tamanho real da janela assim
+    // que ela entra no DOM.
+    this.scheduleFit();
   }
 
   private buildTitlebar(): HTMLDivElement {
@@ -243,7 +246,9 @@ export class TerminalWindow {
     this.element.addEventListener("mousedown", () => this.focus());
 
     this.element.addEventListener("wheel", (e) => {
-      e.stopPropagation();
+      // Ctrl+roda continua chegando ao canvas: zoom no cursor mesmo com o
+      // mouse sobre um terminal.
+      if (!e.ctrlKey) e.stopPropagation();
     });
 
     this.element.addEventListener("contextmenu", (e) => {
@@ -308,6 +313,21 @@ export class TerminalWindow {
     }
   }
 
+  /**
+   * Cola um comando no shell. Com `execute`, envia o Enter no mesmo evento de
+   * entrada (garante que o Enter chegue depois do comando). Sem `execute`, o
+   * usuário confirma manualmente.
+   */
+  pasteCommand(command: string, execute = false): void {
+    if (this.disposed) return;
+    if (execute) {
+      this.term.input(`${command}\r`);
+    } else {
+      this.term.paste(command);
+    }
+    this.focus();
+  }
+
   private onPtyEvent(event: PtyEvent): void {
     if (event.kind === "data" && event.data) {
       const decoded = atob(event.data);
@@ -333,19 +353,52 @@ export class TerminalWindow {
   }
 
   render(zoom: number): void {
-    if (this.maximized) return;
+    this.currentZoom = zoom;
+    // Uma janela maximizada acompanha o viewport também quando o zoom muda.
+    if (this.maximized) {
+      const rect = this.canvas.worldRectVisible();
+      this.x = rect.x;
+      this.y = rect.y;
+      this.w = rect.w;
+      this.h = rect.h;
+    }
     this.element.style.left = `${this.x * zoom}px`;
     this.element.style.top = `${this.y * zoom}px`;
     this.element.style.width = `${this.w * zoom}px`;
     this.element.style.height = `${this.h * zoom}px`;
+    // Todo o cromo da janela (barra de título, controles, paddings) escala
+    // junto com a fonte do xterm: o zoom é uniforme, sem reflow do terminal.
+    this.element.style.setProperty("--z", String(zoom));
+    this.applyFontSize(zoom);
+  }
+
+  /**
+   * O xterm não aceita ser reduzido via `transform: scale()` sem quebrar as
+   * coordenadas de mouse/seleção. Em vez disso, a fonte acompanha o zoom e o
+   * terminal é redimensionado em colunas/linhas — como largura e fonte escalam
+   * na mesma proporção, o layout do terminal permanece idêntico (sem reflow).
+   */
+  private applyFontSize(zoom: number): void {
+    const size = Math.max(3, Math.min(48, Math.round(BASE_FONT_SIZE * zoom * 100) / 100));
+    if (size === this.currentFontSize) return;
+    this.currentFontSize = size;
+    this.term.options.fontSize = size;
+    this.throttledFit();
   }
 
   focus(): void {
     if (this.disposed) return;
+    // Ao focar um terminal, o canvas deixa o modo de navegação por teclado.
+    this.canvas.setCanvasActive(false);
     this.term.focus();
     this.element.classList.add("active");
     this.bringToFront();
     this.onFocus?.(this.id);
+  }
+
+  /** Recalcula colunas/linhas após uma mudança de geometria externa. */
+  refit(): void {
+    this.scheduleFit();
   }
 
   blur(): void {
@@ -365,6 +418,7 @@ export class TerminalWindow {
 
   toggleMinimize(): void {
     this.element.classList.toggle("minimized");
+    if (!this.element.classList.contains("minimized")) this.scheduleFit();
   }
 
   toggleMaximize(): void {
@@ -630,15 +684,33 @@ export class TerminalWindow {
 
   private fit(): void {
     if (this.disposed || this.element.classList.contains("minimized")) return;
-    try {
-      this.fitAddon.fit();
-    } catch {
-      return;
+
+    // O FitAddon reserva 14px fixos para a barra de rolagem sempre que há
+    // scrollback. Como todo o resto escala com o zoom, essa constante faria o
+    // terminal refluir a cada nível. Calculamos as dimensões aqui usando a
+    // mesma célula do xterm, reservando a barra proporcionalmente.
+    const root = this.term.element;
+    const screen = root?.querySelector<HTMLElement>(".xterm-screen");
+    if (!root || !screen || this.term.cols <= 0 || this.term.rows <= 0) return;
+
+    const screenW = parseFloat(screen.style.width);
+    const screenH = parseFloat(screen.style.height);
+    if (!(screenW > 0) || !(screenH > 0)) return;
+
+    const cellW = screenW / this.term.cols;
+    const cellH = screenH / this.term.rows;
+    const availW = root.clientWidth;
+    const availH = root.clientHeight;
+    if (availW <= 0 || availH <= 0 || cellW <= 0 || cellH <= 0) return;
+
+    const scrollback = this.term.options.scrollback ?? 0;
+    const scrollbar = scrollback > 0 ? 14 * this.currentZoom : 0;
+    const cols = Math.max(2, Math.floor((availW - scrollbar) / cellW));
+    const rows = Math.max(1, Math.floor(availH / cellH));
+
+    if (cols !== this.term.cols || rows !== this.term.rows) {
+      this.term.resize(cols, rows);
     }
-    const dims = this.fitAddon.proposeDimensions();
-    if (!dims) return;
-    const cols = Math.floor(dims.cols);
-    const rows = Math.floor(dims.rows);
     if (cols !== this.lastCols || rows !== this.lastRows) {
       this.lastCols = cols;
       this.lastRows = rows;

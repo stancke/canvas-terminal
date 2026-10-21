@@ -1,4 +1,5 @@
 import "@xterm/xterm/css/xterm.css";
+import { isTauri } from "@tauri-apps/api/core";
 import { Canvas } from "./canvas";
 import {
   createTerminal,
@@ -12,6 +13,12 @@ import {
   type ShellInfo,
 } from "./pty";
 import { loadLayout, saveLayout } from "./persistence";
+import {
+  createQuickCommand,
+  loadQuickCommands,
+  saveQuickCommands,
+  type QuickCommand,
+} from "./snippets";
 import { initTheme, onThemeChange, themeLabel, toggleTheme } from "./theme";
 
 const DEFAULT_W = 720;
@@ -21,18 +28,18 @@ let canvas: Canvas;
 let shells: ShellInfo[] = [];
 let focusedTerminal: TerminalWindow | null = null;
 let zCounter = 10;
+let quickCommands: QuickCommand[] = [];
+let hintTimer: ReturnType<typeof setTimeout> | null = null;
 
 const toolbar = {
-  newBtn: document.querySelector<HTMLButtonElement>("#btn-new-terminal")!,
   shellSelect: document.querySelector<HTMLSelectElement>("#shell-select")!,
-  organizeBtn: document.querySelector<HTMLButtonElement>("#btn-organize")!,
-  centerBtn: document.querySelector<HTMLButtonElement>("#btn-center")!,
-  resetZoomBtn: document.querySelector<HTMLButtonElement>("#btn-reset-zoom")!,
-  themeBtn: document.querySelector<HTMLButtonElement>("#btn-theme")!,
+  fullscreenBtn: document.querySelector<HTMLButtonElement>("#btn-fullscreen")!,
   zoom: document.querySelector<HTMLSpanElement>("#zoom-indicator")!,
   count: document.querySelector<HTMLSpanElement>("#terminal-count")!,
   coords: document.querySelector<HTMLSpanElement>("#coords")!,
 };
+
+const menuEls = Array.from(document.querySelectorAll<HTMLElement>("#menubar .menu"));
 
 const contextMenu = document.querySelector<HTMLDivElement>("#context-menu")!;
 
@@ -56,7 +63,10 @@ async function main(): Promise<void> {
   populateShellSelect();
 
   bindToolbar();
+  bindQuickPanel();
   bindGlobalShortcuts();
+  bindAutoHideToolbar();
+  bindFullscreenWatcher();
   bindContextMenu();
   bindTitlebarContext();
 
@@ -139,17 +149,455 @@ async function addTerminal(
   return terminal;
 }
 
-function bindToolbar(): void {
-  toolbar.newBtn.addEventListener("click", () => addTerminalAtCenter());
-  toolbar.organizeBtn.addEventListener("click", () => organizeTerminals());
-  toolbar.centerBtn.addEventListener("click", () => centerView());
-  toolbar.resetZoomBtn.addEventListener("click", () => resetZoom());
-  toolbar.themeBtn.addEventListener("click", () => toggleTheme());
-}
-
 /** O rótulo mostra o tema em uso; o clique alterna. */
 function syncThemeButton(): void {
-  toolbar.themeBtn.textContent = themeLabel();
+  const label = document.querySelector<HTMLElement>("#menu-theme .menu-label");
+  if (label) label.textContent = themeLabel();
+}
+
+function bindToolbar(): void {
+  bindMenubar();
+  bindMenuActions();
+  bindDialog();
+  toolbar.fullscreenBtn.addEventListener("click", () => void toggleFullscreen());
+}
+
+/* ---- Menus do cabeçalho ---- */
+
+function openMenu(menu: HTMLElement): void {
+  for (const other of menuEls) {
+    const open = other === menu;
+    other.classList.toggle("open", open);
+    other
+      .querySelector(".menu-button")
+      ?.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+}
+
+/** Fecha todos os menus; devolve `true` se havia algum aberto. */
+function closeAllMenus(): boolean {
+  let any = false;
+  for (const menu of menuEls) {
+    if (menu.classList.contains("open")) any = true;
+    menu.classList.remove("open");
+    menu.querySelector(".menu-button")?.setAttribute("aria-expanded", "false");
+  }
+  return any;
+}
+
+function bindMenubar(): void {
+  const menubar = document.getElementById("menubar")!;
+
+  for (const menu of menuEls) {
+    const button = menu.querySelector<HTMLButtonElement>(".menu-button")!;
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (menu.classList.contains("open")) closeAllMenus();
+      else openMenu(menu);
+    });
+    // Com um menu aberto, passar o mouse por outra categoria troca de menu.
+    button.addEventListener("mouseenter", () => {
+      if (menuEls.some((m) => m.classList.contains("open"))) openMenu(menu);
+    });
+  }
+
+  document.addEventListener("click", (e) => {
+    if (!menubar.contains(e.target as Node)) closeAllMenus();
+  });
+}
+
+function bindMenuActions(): void {
+  const on = (id: string, action: () => void) => {
+    document.getElementById(id)?.addEventListener("click", () => {
+      closeAllMenus();
+      action();
+    });
+  };
+
+  on("menu-new", () => void addTerminalAtCenter());
+  on("menu-close-terminal", () => focusedTerminal?.close());
+  on("menu-quit", () => void quitApp());
+
+  on("menu-theme", () => toggleTheme());
+  on("menu-reset-zoom", () => resetZoom());
+  on("menu-center", () => centerView());
+  on("menu-fullscreen", () => void toggleFullscreen());
+
+  on("menu-organize", () => organizeTerminals());
+  on("menu-cycle", () => cycleFocus(1));
+  on("menu-maximize", () => focusedTerminal?.toggleMaximize());
+  on("menu-minimize", () => focusedTerminal?.toggleMinimize());
+
+  on("menu-shortcuts", () => showShortcutsDialog());
+  on("menu-about", () => showAboutDialog());
+}
+
+/* ---- Diálogos ---- */
+
+function bindDialog(): void {
+  const dialog = document.getElementById("app-dialog")!;
+  document.getElementById("dialog-close")?.addEventListener("click", () => closeDialog());
+  dialog.addEventListener("mousedown", (e) => {
+    if (e.target === dialog) closeDialog();
+  });
+}
+
+function showDialog(title: string, html: string): void {
+  document.getElementById("dialog-title")!.textContent = title;
+  document.getElementById("dialog-body")!.innerHTML = html;
+  document.getElementById("app-dialog")!.classList.remove("hidden");
+}
+
+function closeDialog(): boolean {
+  const dialog = document.getElementById("app-dialog")!;
+  if (dialog.classList.contains("hidden")) return false;
+  dialog.classList.add("hidden");
+  return true;
+}
+
+function showShortcutsDialog(): void {
+  const shortcuts: Array<[string, string]> = [
+    ["Novo terminal", "Ctrl+T"],
+    ["Fechar terminal", "Ctrl+Shift+W"],
+    ["Sair do aplicativo", "Ctrl+Q"],
+    ["Ciclar foco entre terminais", "Ctrl+PageDown / Ctrl+PageUp"],
+    ["Renomear terminal", "F2"],
+    ["Zoom no cursor", "Ctrl + roda do mouse"],
+    ["Aumentar / diminuir zoom", "Ctrl+= / Ctrl+-"],
+    ["Resetar zoom", "Ctrl+0"],
+    ["Pan do canvas", "Espaço + arrastar · botão do meio"],
+    ["Navegar no canvas (clique antes em área vazia)", "WASD / setas"],
+    ["Pan horizontal", "Shift + roda do mouse"],
+    ["Tela cheia", "F11 / Ctrl+Shift+F"],
+    ["Alternar tema", "Ctrl+Shift+L"],
+  ];
+  const rows = shortcuts
+    .map(([label, key]) => `<tr><td>${label}</td><td>${key}</td></tr>`)
+    .join("");
+  showDialog("Atalhos de teclado", `<table>${rows}</table>`);
+}
+
+function showAboutDialog(): void {
+  showDialog(
+    "Sobre",
+    `<h3>Canvas Terminal 0.1.0</h3>
+     <p>Canvas infinito com terminais reais, construído com Tauri 2,
+     TypeScript e xterm.js.</p>
+     <p>Terminais, zoom e posição são salvos automaticamente.</p>`,
+  );
+}
+
+async function quitApp(): Promise<void> {
+  if (isTauri()) {
+    await killAllTerminals().catch(() => 0);
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().close();
+    return;
+  }
+  window.close();
+}
+
+/* ---- Comandos rápidos ---- */
+
+const QUICK_COLLAPSED_KEY = "canvas-terminal.quick-panel-collapsed.v1";
+let editingQuickId: string | null = null;
+
+function persistQuickCollapsed(value: boolean): void {
+  try {
+    localStorage.setItem(QUICK_COLLAPSED_KEY, value ? "1" : "0");
+  } catch {
+    // Ignora quota/escrita bloqueada.
+  }
+}
+
+/** Abre o formulário para adicionar (sem `item`) ou editar um comando. */
+function openQuickForm(item?: QuickCommand): void {
+  const panel = document.getElementById("quick-panel")!;
+  const form = document.getElementById("quick-form") as HTMLFormElement;
+  const labelInput = document.getElementById("quick-label") as HTMLInputElement;
+  const commandInput = document.getElementById("quick-command") as HTMLInputElement;
+  const executeInput = document.getElementById("quick-execute") as HTMLInputElement;
+  const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+
+  editingQuickId = item?.id ?? null;
+  panel.classList.remove("collapsed");
+  persistQuickCollapsed(false);
+  form.classList.remove("hidden");
+  labelInput.value = item?.label ?? "";
+  commandInput.value = item?.command ?? "";
+  executeInput.checked = item?.execute ?? false;
+  if (submit) submit.textContent = item ? "Atualizar" : "Salvar";
+  commandInput.focus();
+  if (item) commandInput.select();
+}
+
+function closeQuickForm(): void {
+  const form = document.getElementById("quick-form") as HTMLFormElement;
+  form.classList.add("hidden");
+  form.reset();
+  editingQuickId = null;
+  const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (submit) submit.textContent = "Salvar";
+}
+
+function bindQuickPanel(): void {
+  const panel = document.getElementById("quick-panel")!;
+  const form = document.getElementById("quick-form") as HTMLFormElement;
+  const labelInput = document.getElementById("quick-label") as HTMLInputElement;
+  const commandInput = document.getElementById("quick-command") as HTMLInputElement;
+  const executeInput = document.getElementById("quick-execute") as HTMLInputElement;
+  const addButton = document.getElementById("quick-add")!;
+  const cancelButton = document.getElementById("quick-cancel")!;
+  const toggleButton = document.getElementById("quick-toggle")!;
+
+  quickCommands = loadQuickCommands();
+  renderQuickCommands();
+
+  let collapsed = false;
+  try {
+    collapsed = localStorage.getItem(QUICK_COLLAPSED_KEY) === "1";
+  } catch {
+    collapsed = false;
+  }
+  panel.classList.toggle("collapsed", collapsed);
+
+  addButton.addEventListener("click", () => openQuickForm());
+  cancelButton.addEventListener("click", closeQuickForm);
+  toggleButton.addEventListener("click", () => {
+    const nowCollapsed = panel.classList.toggle("collapsed");
+    persistQuickCollapsed(nowCollapsed);
+    if (nowCollapsed) closeQuickForm();
+  });
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const command = commandInput.value.trim();
+    if (!command) {
+      commandInput.focus();
+      return;
+    }
+
+    const label = labelInput.value.trim() || command;
+    const execute = executeInput.checked;
+    let savedId = editingQuickId;
+
+    const existing = editingQuickId
+      ? quickCommands.find((entry) => entry.id === editingQuickId)
+      : undefined;
+    if (existing) {
+      existing.label = label;
+      existing.command = command;
+      existing.execute = execute;
+    } else {
+      const created = createQuickCommand(label, command, execute);
+      quickCommands.push(created);
+      savedId = created.id;
+    }
+
+    saveQuickCommands(quickCommands);
+    renderQuickCommands();
+    closeQuickForm();
+
+    if (savedId) {
+      const list = document.getElementById("quick-list");
+      const row = Array.from(list?.children ?? []).find(
+        (el) => (el as HTMLElement).dataset.id === savedId,
+      ) as HTMLElement | undefined;
+      row?.scrollIntoView({ block: "nearest" });
+    }
+  });
+
+  // O handler global ignora eventos vindos de inputs; Esc fecha o formulário.
+  form.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeQuickForm();
+    }
+  });
+}
+
+function renderQuickCommands(): void {
+  const list = document.getElementById("quick-list")!;
+  const empty = document.getElementById("quick-empty")!;
+  list.innerHTML = "";
+
+  for (const item of quickCommands) {
+    const row = document.createElement("div");
+    row.className = "quick-item";
+    row.dataset.id = item.id;
+
+    const run = document.createElement("button");
+    run.type = "button";
+    run.className = "quick-run";
+    run.title = item.execute
+      ? `${item.command}\n(clique para colar e executar)`
+      : `${item.command}\n(clique para colar no terminal em foco)`;
+    run.textContent = item.label;
+    run.addEventListener("click", () => runQuickCommand(item));
+
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "quick-edit";
+    edit.title = "Editar comando";
+    edit.textContent = "✎";
+    edit.addEventListener("click", () => openQuickForm(item));
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "quick-remove";
+    remove.title = "Remover comando";
+    remove.textContent = "×";
+    remove.addEventListener("click", () => {
+      if (editingQuickId === item.id) closeQuickForm();
+      quickCommands = quickCommands.filter((entry) => entry.id !== item.id);
+      saveQuickCommands(quickCommands);
+      renderQuickCommands();
+    });
+
+    row.append(run);
+    if (item.execute) {
+      const execBadge = document.createElement("span");
+      execBadge.className = "quick-exec";
+      execBadge.title = "Executa ao colar";
+      execBadge.textContent = "↵";
+      row.append(execBadge);
+    }
+    row.append(edit, remove);
+    list.appendChild(row);
+  }
+
+  empty.classList.toggle("hidden", quickCommands.length > 0);
+}
+
+function runQuickCommand(item: QuickCommand): void {
+  if (!focusedTerminal) {
+    flashHint("Clique em um terminal antes de usar um comando rápido.");
+    return;
+  }
+  focusedTerminal.pasteCommand(item.command, item.execute);
+}
+
+/** Mostra uma mensagem temporária na barra de status. */
+function flashHint(message: string): void {
+  const hint = document.getElementById("hint");
+  if (!hint) return;
+  if (hintTimer) clearTimeout(hintTimer);
+  const original = hint.dataset.original ?? hint.textContent ?? "";
+  hint.dataset.original = original;
+  hint.textContent = message;
+  hintTimer = setTimeout(() => {
+    hintTimer = null;
+    hint.textContent = hint.dataset.original || original;
+  }, 3000);
+}
+
+/** O cabeçalho fica escondido e desce quando o mouse encosta no topo da tela. */
+function bindAutoHideToolbar(): void {
+  const bar = document.getElementById("toolbar")!;
+  const hotzone = document.getElementById("toolbar-hotzone")!;
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const show = () => {
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+    bar.classList.add("visible");
+  };
+
+  const scheduleHide = (delay = 350) => {
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      hideTimer = null;
+      // Não esconde enquanto o usuário interage com a barra (select, foco)
+      // ou enquanto um submenu estiver aberto.
+      if (bar.contains(document.activeElement)) return;
+      if (bar.querySelector(".menu.open")) return;
+      if (bar.matches(":hover")) return;
+      bar.classList.remove("visible");
+    }, delay);
+  };
+
+  hotzone.addEventListener("mouseenter", show);
+  hotzone.addEventListener("click", show);
+  bar.addEventListener("mouseenter", show);
+  bar.addEventListener("mouseleave", () => scheduleHide());
+  bar.addEventListener("focusin", show);
+  bar.addEventListener("focusout", () => scheduleHide());
+
+  // Abre visível por alguns segundos: dá tempo de descobrir os menus antes de
+  // a barra se esconder sozinha.
+  show();
+  scheduleHide(2500);
+}
+
+function bindFullscreenWatcher(): void {
+  if (isTauri()) {
+    // Fullscreen também pode ser acionado pelo WM/atalho do sistema: mantém o
+    // CSS do app sincronizado com o estado real da janela.
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    window.addEventListener("resize", () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(async () => {
+        timer = null;
+        try {
+          const { getCurrentWindow } = await import("@tauri-apps/api/window");
+          const on = await getCurrentWindow().isFullscreen();
+          if (on !== document.body.classList.contains("fullscreen-mode")) {
+            setFullscreenUi(on);
+          }
+        } catch {
+          // Sem permissão/indisponível: ignora.
+        }
+      }, 200);
+    });
+    return;
+  }
+  // Modo navegador (npm run dev sem Tauri): usa a Fullscreen API do webview.
+  document.addEventListener("fullscreenchange", () => {
+    setFullscreenUi(!!document.fullscreenElement);
+  });
+}
+
+/**
+ * Tela cheia de verdade: no Tauri a janela entra em fullscreen nativo (some a
+ * moldura e a barra de tarefas do Linux); o cromo do app também é ocultado.
+ */
+async function toggleFullscreen(): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const win = getCurrentWindow();
+      const next = !(await win.isFullscreen());
+      await win.setFullscreen(next);
+      setFullscreenUi(next);
+    } catch (err) {
+      console.error("Falha ao alternar tela cheia:", err);
+    }
+    return;
+  }
+
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    } else {
+      await document.documentElement.requestFullscreen();
+    }
+  } catch (err) {
+    console.error("Falha ao alternar tela cheia:", err);
+  }
+}
+
+function setFullscreenUi(on: boolean): void {
+  document.body.classList.toggle("fullscreen-mode", on);
+  const label = document.querySelector<HTMLElement>("#menu-fullscreen .menu-label");
+  if (label) label.textContent = on ? "Sair da tela cheia" : "Tela cheia";
+  toolbar.fullscreenBtn.title = on ? "Sair da tela cheia (F11)" : "Tela cheia (F11)";
+  toolbar.fullscreenBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  document.getElementById("toolbar")?.classList.remove("visible");
+  // O viewport mudou de tamanho: reavalia grid e janelas maximizadas.
+  requestAnimationFrame(() => canvas.requestRender());
 }
 
 function bindGlobalShortcuts(): void {
@@ -169,9 +617,46 @@ function bindGlobalShortcuts(): void {
         e.stopPropagation();
       };
 
+      if (e.key === "Escape") {
+        if (closeDialog()) {
+          own();
+          return;
+        }
+        if (closeAllMenus()) {
+          own();
+          return;
+        }
+        // O fullscreen só sai por F11 ou pelo menu Exibir → Tela cheia.
+        return;
+      }
+      if (e.key === "F11") {
+        own();
+        void toggleFullscreen();
+        return;
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === "f") {
+        own();
+        void toggleFullscreen();
+        return;
+      }
+      if (mod && (e.key === "=" || e.key === "+")) {
+        own();
+        canvas.zoomBy(1.1);
+        return;
+      }
+      if (mod && (e.key === "-" || e.key === "_")) {
+        own();
+        canvas.zoomBy(1 / 1.1);
+        return;
+      }
       if (mod && e.key.toLowerCase() === "t") {
         own();
         await addTerminalAtCenter();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "q") {
+        own();
+        await quitApp();
         return;
       }
       if (mod && e.shiftKey && e.key.toLowerCase() === "w") {
@@ -267,6 +752,7 @@ function organizeTerminals(): void {
     term.maximized = false;
     term.savedGeom = undefined;
     term.render(canvas.zoom);
+    term.refit();
     term.focus();
   });
   persist();
@@ -293,7 +779,7 @@ function centerView(): void {
 }
 
 function resetZoom(): void {
-  canvas.setView(canvas.panX, canvas.panY, 1);
+  canvas.setZoomAtCenter(1);
 }
 
 function updateStatus(): void {

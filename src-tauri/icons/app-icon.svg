@@ -1,0 +1,37 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18202b"/>
+      <stop offset="1" stop-color="#0b0e12"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="296" y1="456" x2="728" y2="656" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7cc0ff"/>
+      <stop offset="1" stop-color="#3b82c7"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="160" y1="232" x2="864" y2="336" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#232c38"/>
+      <stop offset="1" stop-color="#1a212b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Fundo: canvas infinito -->
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <g stroke="#4ea1ff" stroke-opacity="0.12" stroke-width="6">
+    <path d="M341 0V1024M683 0V1024M0 341H1024M0 683H1024"/>
+  </g>
+  <rect x="3" y="3" width="1018" height="1018" rx="222" stroke="#ffffff" stroke-opacity="0.08" stroke-width="6"/>
+
+  <!-- Janela de terminal -->
+  <rect x="160" y="232" width="704" height="560" rx="64" fill="#12171e"/>
+  <rect x="160" y="232" width="704" height="560" rx="64" stroke="#4ea1ff" stroke-opacity="0.45" stroke-width="12"/>
+  <path d="M160 296a64 64 0 0 1 64-64h576a64 64 0 0 1 64 64v40H160z" fill="url(#bar)"/>
+
+  <!-- Controles da barra de título -->
+  <circle cx="240" cy="284" r="15" fill="#3fb950"/>
+  <circle cx="296" cy="284" r="15" fill="#d29922"/>
+  <circle cx="352" cy="284" r="15" fill="#4ea1ff"/>
+
+  <!-- Prompt do shell: >_ -->
+  <path d="M296 456L424 552L296 648" stroke="url(#accent)" stroke-width="78" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="488" y="596" width="240" height="60" rx="18" fill="url(#accent)"/>
+</svg>

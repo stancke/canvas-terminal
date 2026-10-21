@@ -12,6 +12,25 @@ export interface Rect {
   h: number;
 }
 
+/** Limites do zoom do canvas. */
+export const MIN_ZOOM = 0.25;
+export const MAX_ZOOM = 3;
+
+/** Teclas de navegação da câmera (WASD + setas), quando o canvas está em foco. */
+const PAN_KEYS: Record<string, Point> = {
+  KeyW: { x: 0, y: 1 },
+  ArrowUp: { x: 0, y: 1 },
+  KeyS: { x: 0, y: -1 },
+  ArrowDown: { x: 0, y: -1 },
+  KeyA: { x: 1, y: 0 },
+  ArrowLeft: { x: 1, y: 0 },
+  KeyD: { x: -1, y: 0 },
+  ArrowRight: { x: -1, y: 0 },
+};
+
+/** Velocidade da navegação por teclado, em pixels de tela por segundo. */
+const KEY_PAN_SPEED = 900;
+
 export class Canvas {
   readonly viewport: HTMLElement;
   readonly world: HTMLElement;
@@ -20,6 +39,8 @@ export class Canvas {
   panX = 0;
   panY = 0;
   zoom = 1;
+  /** Verdadeiro quando o último clique foi em área vazia (modo navegação). */
+  canvasActive = false;
 
   private isPanning = false;
   private panButton = -1;
@@ -30,6 +51,9 @@ export class Canvas {
   private suppressContextMenu = false;
   private rafPending = false;
   private autoPanTimer: ReturnType<typeof setInterval> | null = null;
+  private heldPanKeys = new Set<string>();
+  private keyPanRaf: number | null = null;
+  private lastKeyPanTime = 0;
 
   onEmptyContextMenu?: (point: Point) => void;
   /** Avisa o app que pan/zoom mudaram (atualiza o indicador da toolbar). */
@@ -104,9 +128,46 @@ export class Canvas {
   setView(panX: number, panY: number, zoom: number): void {
     this.panX = panX;
     this.panY = panY;
-    this.zoom = Math.max(0.35, Math.min(2.5, zoom));
+    this.zoom = this.clampZoom(zoom);
     this.requestRender();
     this.onViewChange?.();
+  }
+
+  private clampZoom(zoom: number): number {
+    return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+  }
+
+  /** Zoom mantendo o centro do viewport como âncora. */
+  setZoomAtCenter(zoom: number): void {
+    this.zoomAt(this.viewport.clientWidth / 2, this.viewport.clientHeight / 2, zoom);
+  }
+
+  zoomBy(factor: number): void {
+    this.setZoomAtCenter(this.zoom * factor);
+  }
+
+  /**
+   * Marca o canvas como “em foco” (clique em área vazia). Nesse modo, WASD e
+   * as setas navegam; ao focar um terminal, o teclado volta para o shell.
+   */
+  setCanvasActive(active: boolean): void {
+    if (this.canvasActive === active) return;
+    this.canvasActive = active;
+    this.viewport.classList.toggle("canvas-active", active);
+    if (active) {
+      for (const terminal of this.terminals.values()) terminal.blur();
+      this.viewport.focus({ preventScroll: true });
+    } else {
+      this.stopKeyPan();
+    }
+  }
+
+  /** Só navega por teclado quando o foco está no canvas e não há modal aberto. */
+  private canUseCanvasKeys(): boolean {
+    if (!this.canvasActive) return false;
+    if (document.querySelector('[aria-modal="true"]:not(.hidden)')) return false;
+    const active = document.activeElement;
+    return active === this.viewport || active === document.body;
   }
 
   requestRender(): void {
@@ -141,10 +202,14 @@ export class Canvas {
     window.addEventListener("keyup", (e) => this.onKeyUp(e));
     this.viewport.addEventListener("contextmenu", (e) => this.onContextMenu(e));
     window.addEventListener("resize", () => this.requestRender());
+    window.addEventListener("blur", () => this.stopKeyPan());
   }
 
   private onMouseDown(e: MouseEvent): void {
     if (e.target !== this.viewport && e.target !== this.world) return;
+
+    // Clique em área vazia: ativa a navegação por WASD/setas.
+    this.setCanvasActive(true);
 
     if (e.button === 0 && this.spacePressed) {
       this.startPan(e, 0);
@@ -199,9 +264,10 @@ export class Canvas {
   private onWheel(e: WheelEvent): void {
     if (e.ctrlKey) {
       e.preventDefault();
-      const zoomStep = 0.1;
-      const newZoom = e.deltaY < 0 ? this.zoom + zoomStep : this.zoom - zoomStep;
-      this.zoomAt(e.clientX, e.clientY, newZoom);
+      // Zoom multiplicativo: cada passo mantém a mesma sensação em qualquer
+      // nível (de 25% a 300%).
+      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      this.zoomAt(e.clientX, e.clientY, this.zoom * factor);
     } else {
       e.preventDefault();
       const dx = e.shiftKey ? -e.deltaY : 0;
@@ -213,7 +279,7 @@ export class Canvas {
   }
 
   private zoomAt(screenX: number, screenY: number, newZoom: number): void {
-    const clamped = Math.max(0.35, Math.min(2.5, newZoom));
+    const clamped = this.clampZoom(newZoom);
     if (clamped === this.zoom) return;
     const worldBefore = this.screenToWorld(screenX, screenY);
     this.zoom = clamped;
@@ -229,12 +295,62 @@ export class Canvas {
       e.preventDefault();
       this.spacePressed = true;
     }
+
+    if (!this.canUseCanvasKeys() || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!PAN_KEYS[e.code]) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.heldPanKeys.add(e.code);
+    this.startKeyPan();
   }
 
   private onKeyUp(e: KeyboardEvent): void {
     if (e.code === "Space") {
       this.spacePressed = false;
     }
+    if (PAN_KEYS[e.code]) {
+      this.heldPanKeys.delete(e.code);
+      if (this.heldPanKeys.size === 0) this.stopKeyPan();
+    }
+  }
+
+  private startKeyPan(): void {
+    if (this.keyPanRaf !== null) return;
+    this.lastKeyPanTime = performance.now();
+    this.keyPanRaf = requestAnimationFrame((now) => this.tickKeyPan(now));
+  }
+
+  private stopKeyPan(): void {
+    this.heldPanKeys.clear();
+    if (this.keyPanRaf !== null) {
+      cancelAnimationFrame(this.keyPanRaf);
+      this.keyPanRaf = null;
+    }
+  }
+
+  private tickKeyPan(now: number): void {
+    this.keyPanRaf = null;
+    if (!this.canvasActive || this.heldPanKeys.size === 0) return;
+
+    const dt = Math.min(0.05, (now - this.lastKeyPanTime) / 1000);
+    this.lastKeyPanTime = now;
+
+    let dx = 0;
+    let dy = 0;
+    for (const code of this.heldPanKeys) {
+      const dir = PAN_KEYS[code];
+      if (!dir) continue;
+      dx += dir.x;
+      dy += dir.y;
+    }
+    if (dx === 0 && dy === 0) return;
+
+    const length = Math.hypot(dx, dy);
+    const step = KEY_PAN_SPEED * dt;
+    this.panX += (dx / length) * step;
+    this.panY += (dy / length) * step;
+    this.requestRender();
+    this.keyPanRaf = requestAnimationFrame((next) => this.tickKeyPan(next));
   }
 
   private onContextMenu(e: MouseEvent): void {
@@ -271,5 +387,6 @@ export class Canvas {
 
   dispose(): void {
     this.stopAutoPan();
+    this.stopKeyPan();
   }
 }
