@@ -12,6 +12,7 @@ import {
   type ShellInfo,
 } from "./pty";
 import { loadLayout, saveLayout } from "./persistence";
+import { initTheme, onThemeChange, themeLabel, toggleTheme } from "./theme";
 
 const DEFAULT_W = 720;
 const DEFAULT_H = 420;
@@ -27,6 +28,7 @@ const toolbar = {
   organizeBtn: document.querySelector<HTMLButtonElement>("#btn-organize")!,
   centerBtn: document.querySelector<HTMLButtonElement>("#btn-center")!,
   resetZoomBtn: document.querySelector<HTMLButtonElement>("#btn-reset-zoom")!,
+  themeBtn: document.querySelector<HTMLButtonElement>("#btn-theme")!,
   zoom: document.querySelector<HTMLSpanElement>("#zoom-indicator")!,
   count: document.querySelector<HTMLSpanElement>("#terminal-count")!,
   coords: document.querySelector<HTMLSpanElement>("#coords")!,
@@ -35,6 +37,10 @@ const toolbar = {
 const contextMenu = document.querySelector<HTMLDivElement>("#context-menu")!;
 
 async function main(): Promise<void> {
+  initTheme();
+  syncThemeButton();
+  onThemeChange(() => syncThemeButton());
+
   await initPtyListener();
   // Uma recarga do webview deixaria os PTYs antigos órfãos: limpa antes de restaurar.
   await killAllTerminals().catch(() => 0);
@@ -138,6 +144,12 @@ function bindToolbar(): void {
   toolbar.organizeBtn.addEventListener("click", () => organizeTerminals());
   toolbar.centerBtn.addEventListener("click", () => centerView());
   toolbar.resetZoomBtn.addEventListener("click", () => resetZoom());
+  toolbar.themeBtn.addEventListener("click", () => toggleTheme());
+}
+
+/** O rótulo mostra o tema em uso; o clique alterna. */
+function syncThemeButton(): void {
+  toolbar.themeBtn.textContent = themeLabel();
 }
 
 function bindGlobalShortcuts(): void {
@@ -199,6 +211,11 @@ function bindGlobalShortcuts(): void {
       if (mod && e.shiftKey && e.key.toLowerCase() === "o") {
         own();
         organizeTerminals();
+        return;
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === "l") {
+        own();
+        toggleTheme();
         return;
       }
     },

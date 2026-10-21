@@ -2,6 +2,23 @@
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Aplica o tema salvo antes da primeira pintura: sem isso a janela abre
+      // escura e só depois clareia quando o usuário escolheu o tema claro.
+      (function () {
+        try {
+          var saved = localStorage.getItem("canvas-terminal.theme.v1");
+          var theme =
+            saved === "light" || saved === "dark"
+              ? saved
+              : window.matchMedia("(prefers-color-scheme: light)").matches
+                ? "light"
+                : "dark";
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme;
+        } catch (e) {}
+      })();
+    </script>
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Canvas Terminal</title>
@@ -22,6 +39,9 @@
         <button id="btn-center" title="Centralizar vista (Ctrl+Home)">Centralizar</button>
         <button id="btn-reset-zoom" title="Resetar zoom (Ctrl+0)">
           Resetar zoom
+        </button>
+        <button id="btn-theme" title="Alternar tema claro/escuro (Ctrl+Shift+L)">
+          Tema escuro
         </button>
       </div>
       <div class="toolbar-status">

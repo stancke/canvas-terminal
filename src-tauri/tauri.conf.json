@@ -19,10 +19,9 @@
         "minWidth": 900,
         "minHeight": 600,
         "resizable": true,
-        "theme": "Dark",
+        "theme": null,
         "center": true,
-        "maximized": true,
-        "backgroundColor": "#0b0e12"
+        "maximized": true
       }
     ],
     "security": {

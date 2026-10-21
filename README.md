@@ -4,7 +4,13 @@ Aplicativo desktop de **canvas infinito** com terminais reais (PowerShell, cmd, 
 
 O mesmo código-fonte compila tanto no **Windows** quanto no **Linux** (e macOS, com os devidos cuidados de empacotamento).
 
-![Canvas Terminal rodando](docs/screenshot.png)
+Tema escuro (padrão):
+
+![Canvas Terminal no tema escuro](docs/screenshot.png)
+
+Tema claro:
+
+![Canvas Terminal no tema claro](docs/screenshot-claro.png)
 
 ---
 
@@ -94,6 +100,7 @@ Os pacotes ficarão em `src-tauri/target/release/bundle/` (subpastas `deb/`, `rp
 | `Ctrl+W` com o terminal em foco | Vai para o shell (apaga a palavra anterior); fora dele, fecha o terminal |
 | `Ctrl+PageDown` / `Ctrl+PageUp` | Ciclar foco entre terminais |
 | `Ctrl+0` (ou `Cmd+0`) | Resetar zoom |
+| `Ctrl+Shift+L` (ou `Cmd+Shift+L`) | Alternar tema claro/escuro |
 | `Ctrl+Shift+V` / `Ctrl+V` (ou `Cmd+Shift+V` / `Cmd+V`) | Colar no terminal |
 | `Ctrl+C` (ou `Cmd+C`) com seleção | Copiar do terminal |
 | `F2` | Renomear título do terminal |
@@ -101,6 +108,26 @@ Os pacotes ficarão em `src-tauri/target/release/bundle/` (subpastas `deb/`, `rp
 | `Botão do meio` / `botão direito` | Pan do canvas |
 | `Ctrl + roda do mouse` | Zoom no cursor |
 | `Shift + roda do mouse` | Pan horizontal |
+
+---
+
+## Tema (claro / escuro)
+
+O app tem dois temas completos. Escolha em **Tema claro / Tema escuro** na barra
+superior ou com `Ctrl+Shift+L` — a troca é imediata, inclusive no conteúdo dos
+terminais (a paleta do xterm.js é reaplicada nos terminais já abertos).
+
+Sem escolha explícita, o app **segue o tema do sistema operacional**
+(`prefers-color-scheme`); a escolha manual é lembrada em:
+
+```
+localStorage["canvas-terminal.theme.v1"]
+```
+
+As cores ficam em variáveis CSS em `src/styles.css` (`:root` = escuro,
+`:root[data-theme="light"]` = claro); as paletas do terminal estão em
+`src/theme.ts`. A moldura da janela segue o sistema (`theme: null` no
+`tauri.conf.json`).
 
 ---
 

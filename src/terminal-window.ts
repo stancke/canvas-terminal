@@ -11,6 +11,7 @@ import {
   type PtyEvent,
 } from "./pty";
 import { Canvas } from "./canvas";
+import { onThemeChange, terminalPalette } from "./theme";
 
 export interface TerminalState {
   id: number;
@@ -67,6 +68,8 @@ export class TerminalWindow {
   private lastRows = 0;
   /** Remove os listeners de janela (drag/resize) quando a janela morre. */
   private listeners = new AbortController();
+  /** Cancela a inscrição nas mudanças de tema (xterm). */
+  private unsubscribeTheme?: () => void;
 
   onFocus?: (id: number) => void;
   onClose?: (id: number) => void;
@@ -114,12 +117,13 @@ export class TerminalWindow {
       cursorBlink: true,
       scrollback: 10000,
       allowProposedApi: true,
-      theme: {
-        background: "#12171e",
-        foreground: "#c9d1d9",
-        cursor: "#4ea1ff",
-        selectionBackground: "#264f78",
-      },
+      theme: terminalPalette(),
+    });
+
+    // O xterm guarda a paleta numa opção própria: trocar o tema do CSS não a
+    // atualiza sozinho, então cada terminal vivo se inscreve aqui.
+    this.unsubscribeTheme = onThemeChange(() => {
+      if (!this.disposed) this.term.options.theme = terminalPalette();
     });
 
     this.fitAddon = new FitAddon();
@@ -460,6 +464,7 @@ export class TerminalWindow {
     offPtyData(this.id);
     killTerminal(this.id);
     this.term.dispose();
+    this.unsubscribeTheme?.();
     this.listeners.abort();
     this.onClose?.(this.id);
   }
@@ -469,6 +474,7 @@ export class TerminalWindow {
       this.disposed = true;
       offPtyData(this.id);
       this.term.dispose();
+      this.unsubscribeTheme?.();
     }
     this.listeners.abort();
     if (this.element.parentElement) {

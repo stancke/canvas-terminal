@@ -1,4 +1,5 @@
 :root {
+  /* Paleta escura (padrão). A clara vem logo abaixo, em [data-theme="light"]. */
   --bg: #0b0e12;
   --grid: #161b22;
   --grid-strong: #1f2630;
@@ -8,12 +9,42 @@
   --titlebar-active: #26313d;
   --accent: #4ea1ff;
   --accent-dim: #3b82c7;
+  --accent-hover: #6cb3ff;
+  --accent-contrast: #0b0e12;
   --text: #c9d1d9;
   --text-muted: #8b949e;
   --danger: #f85149;
+  --hover: rgba(255, 255, 255, 0.08);
+  --overlay: rgba(11, 14, 18, 0.92);
+  --shadow-window: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-window-active: 0 0 0 1px var(--accent), 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.45);
   --font-mono: "Cascadia Mono", "JetBrains Mono", "DejaVu Sans Mono", Consolas, monospace;
   --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
+
+:root[data-theme="light"] {
+  --bg: #eef1f5;
+  --grid: #e2e7ee;
+  --grid-strong: #d2d9e2;
+  --window: #ffffff;
+  --window-border: #cbd3dd;
+  --titlebar: #f2f5f8;
+  --titlebar-active: #e3eaf3;
+  --accent: #0969da;
+  --accent-dim: #7aa9e0;
+  --accent-hover: #0860ca;
+  --accent-contrast: #ffffff;
+  --text: #1f2328;
+  --text-muted: #5b6472;
+  --danger: #cf222e;
+  --hover: rgba(0, 0, 0, 0.06);
+  --overlay: rgba(255, 255, 255, 0.92);
+  --shadow-window: 0 6px 18px rgba(31, 35, 40, 0.14);
+  --shadow-window-active: 0 0 0 1px var(--accent), 0 10px 26px rgba(31, 35, 40, 0.2);
+  --shadow-menu: 0 8px 20px rgba(31, 35, 40, 0.18);
+}
+
 
 * {
   box-sizing: border-box;
@@ -85,13 +116,13 @@ body {
 
 #btn-new-terminal {
   background: var(--accent);
-  color: #0b0e12;
+  color: var(--accent-contrast);
   border-color: var(--accent);
   font-weight: 600;
 }
 
 #btn-new-terminal:hover {
-  background: #6cb3ff;
+  background: var(--accent-hover);
 }
 
 #shell-select {
@@ -144,14 +175,14 @@ body {
   border: 1px solid var(--window-border);
   border-radius: 6px;
   overflow: hidden;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-window);
   min-width: 240px;
   min-height: 140px;
 }
 
 .term-window.active {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 12px 32px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-window-active);
 }
 
 .term-titlebar {
@@ -218,7 +249,7 @@ body {
 }
 
 .term-controls button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover);
   color: var(--text);
 }
 
@@ -242,7 +273,7 @@ body {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  background: rgba(11, 14, 18, 0.92);
+  background: var(--overlay);
   color: var(--text-muted);
   z-index: 5;
 }
@@ -327,7 +358,7 @@ body {
   background: var(--window);
   border: 1px solid var(--window-border);
   border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-menu);
   z-index: 2000;
   padding: 4px 0;
 }
@@ -399,8 +430,17 @@ body {
 
 /* Renomear inline na barra de título */
 .term-name.editing {
-  outline: 1px solid #4ea1ff;
+  outline: 1px solid var(--accent);
   border-radius: 3px;
   padding: 0 2px;
   cursor: text;
 }
+
+/* Indicadores de shell: no tema claro, os tons pastéis do escuro somem. */
+:root[data-theme="light"] .term-dot.fish { background: #218bff; }
+:root[data-theme="light"] .term-dot.wsl { background: #8250df; }
+:root[data-theme="light"] .term-dot.sh { background: #6e7781; }
+:root[data-theme="light"] .term-dot.override { background: #bf3989; }
+:root[data-theme="light"] .term-dot.pwsh,
+:root[data-theme="light"] .term-dot.powershell { background: #0969da; }
+:root[data-theme="light"] .term-dot.bash { background: #1a7f37; }
