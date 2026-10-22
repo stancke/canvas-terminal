@@ -129,6 +129,12 @@ trocar de aba.
 - `Ctrl+Shift+T` cria uma área; `Ctrl+Tab` e `Ctrl+Shift+Tab` alternam.
 - O menu **Janela** também traz essas ações.
 
+Ao trocar de área pelo cabeçalho, por `Ctrl+Tab` ou por **Q/E** enquanto você
+está no modo normal (sem terminal maximizado), a área escolhida abre **sempre
+no modo normal**: se ela tinha um terminal maximizado salvo, ele é restaurado
+para o tamanho normal. O modo maximizado só é acionado quando você clica em uma
+aba de terminal dentro da faixa maximizada.
+
 No modo maximizado, **arraste os nomes dos terminais** para reordená-los dentro
 do grupo, ou **arraste o nome da área** para mover o grupo inteiro para a
 esquerda/direita. A ordem fica salva no perfil e afeta apenas a faixa de abas

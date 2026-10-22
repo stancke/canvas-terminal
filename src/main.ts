@@ -902,6 +902,7 @@ function maximizeWorkspaceTerminal(
 async function showWorkspace(
   workspace: Workspace,
   focusRef?: TerminalTabRef,
+  forceNormal = false,
 ): Promise<void> {
   await instantiateWorkspace(workspace);
 
@@ -909,10 +910,20 @@ async function showWorkspace(
   canvas.setView(workspace.view.panX, workspace.view.panY, workspace.view.zoom);
   canvas.attachTerminals(workspace.terminals);
 
+  // Navegação feita a partir do modo normal: a área de destino abre normal,
+  // mesmo que tivesse um terminal maximizado salvo.
+  if (forceNormal) {
+    for (const terminal of workspace.terminals) {
+      if (terminal.maximized) terminal.toggleMaximize();
+    }
+  }
+
   const target = focusRef
     ? findTerminalByRef(workspace, focusRef)
     : undefined;
-  const maximized = workspace.terminals.find((terminal) => terminal.maximized);
+  const maximized = forceNormal
+    ? undefined
+    : workspace.terminals.find((terminal) => terminal.maximized);
   const preferred =
     workspace.focusedIndex !== undefined
       ? workspace.terminals[workspace.focusedIndex]
@@ -955,6 +966,7 @@ async function withWorkspaceLock(task: () => Promise<void>): Promise<void> {
 async function switchToWorkspace(
   target: Workspace,
   focusRef?: TerminalTabRef,
+  forceNormal = false,
 ): Promise<void> {
   // Prepara a área de destino (spawn dos PTYs) *antes* de desanexar a atual:
   // assim o usuário não vê um canvas em branco enquanto os terminais sobem.
@@ -969,7 +981,7 @@ async function switchToWorkspace(
     canvas.detachTerminals();
   }
 
-  await showWorkspace(target, focusRef);
+  await showWorkspace(target, focusRef, forceNormal);
   persist();
 }
 
@@ -977,7 +989,11 @@ async function activateWorkspace(id: string): Promise<void> {
   await withWorkspaceLock(async () => {
     const target = workspaces.find((workspace) => workspace.id === id);
     if (!target || target === activeWorkspace) return;
-    await switchToWorkspace(target);
+    // Se a navegação começou no modo normal, a área escolhida abre normal.
+    const wasMaximized = canvas
+      .getAllTerminals()
+      .some((terminal) => terminal.maximized);
+    await switchToWorkspace(target, undefined, !wasMaximized);
   });
 }
 
@@ -1341,7 +1357,10 @@ async function removeWorkspace(workspace: Workspace): Promise<void> {
       const index = workspaces.indexOf(workspace);
       const next = workspaces[index + 1] ?? workspaces[index - 1];
       if (!next) return;
-      await switchToWorkspace(next);
+      const wasMaximized = canvas
+        .getAllTerminals()
+        .some((terminal) => terminal.maximized);
+      await switchToWorkspace(next, undefined, !wasMaximized);
     }
 
     for (const terminal of workspace.terminals) terminal.destroy();
