@@ -39,6 +39,8 @@ export class Canvas {
   panX = 0;
   panY = 0;
   zoom = 1;
+  /** Espaço em pixels no topo reservado ao cabeçalho fixo no modo maximizado. */
+  topInset = 0;
   /** Verdadeiro quando o último clique foi em área vazia (modo navegação). */
   canvasActive = false;
 

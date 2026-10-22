@@ -23,6 +23,8 @@ export interface TerminalState {
   h: number;
   maximized: boolean;
   minimized: boolean;
+  /** Comando executado automaticamente quando o terminal abrir. */
+  startupCommand: string;
   savedGeom?: TerminalState;
 }
 
@@ -73,16 +75,20 @@ export class TerminalWindow {
   h: number;
   maximized = false;
   savedGeom?: TerminalState;
+  /** Comando a executar automaticamente quando o terminal for aberto. */
+  startupCommand = "";
 
   private term: Terminal;
   private termBody: HTMLDivElement;
   private titleEl!: HTMLSpanElement;
   private tabsEl!: HTMLDivElement;
+  private menuBtn!: HTMLButtonElement;
   private overlay!: HTMLDivElement;
   private canvas: Canvas;
   private disposed = false;
   private resizeTimer: ReturnType<typeof setTimeout> | null = null;
   private fitThrottle: ReturnType<typeof setTimeout> | null = null;
+  private startupTimer: ReturnType<typeof setTimeout> | null = null;
   private lastCols = 0;
   private lastRows = 0;
   private currentFontSize = BASE_FONT_SIZE;
@@ -100,6 +106,8 @@ export class TerminalWindow {
   onRequestTerminalTabs?: () => TerminalTabGroup[];
   /** Chamado ao clicar em uma aba de qualquer área de trabalho. */
   onSelectTerminalTab?: (ref: TerminalTabRef) => void;
+  /** Abre/fecha o menu do app pelo botão exibido no modo maximizado. */
+  onToggleAppMenu?: () => void;
 
   constructor(
     canvas: Canvas,
@@ -179,6 +187,23 @@ export class TerminalWindow {
     const dot = document.createElement("span");
     dot.className = `term-dot ${this.shellId}`;
     bar.appendChild(dot);
+
+    // Primeiro item antes das abas no modo maximizado: abre o menu do app.
+    this.menuBtn = document.createElement("button");
+    this.menuBtn.type = "button";
+    this.menuBtn.className = "term-menu-btn";
+    this.menuBtn.title = "Abrir/fechar menu";
+    this.menuBtn.setAttribute("aria-label", "Abrir ou fechar menu");
+    this.menuBtn.innerHTML =
+      '<svg viewBox="0 0 16 16" aria-hidden="true">' +
+      '<path d="M3 4h10M3 8h10M3 12h10" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.6" stroke-linecap="round"/></svg>';
+    this.menuBtn.addEventListener("mousedown", (event) => event.stopPropagation());
+    this.menuBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.onToggleAppMenu?.();
+    });
+    bar.appendChild(this.menuBtn);
 
     this.titleEl = document.createElement("span");
     this.titleEl.className = "term-name";
@@ -308,6 +333,7 @@ export class TerminalWindow {
     this.element.addEventListener("dblclick", (e) => {
       const target = e.target as HTMLElement;
       if (target.closest(".term-tabs")) return;
+      if (target.closest(".term-menu-btn")) return;
       if (target.closest(".term-titlebar")) {
         this.toggleMaximize();
       }
@@ -374,6 +400,40 @@ export class TerminalWindow {
     this.focus();
   }
 
+  /**
+   * Define o comando de inicialização. Não executa agora: ele roda na próxima
+   * vez que o terminal for aberto (início do app ou reinício do terminal).
+   */
+  setStartupCommand(command: string): void {
+    this.startupCommand = command.trim();
+    this.onChange?.();
+  }
+
+  /** Agenda o comando de inicialização após o shell terminar de subir. */
+  scheduleStartupCommand(): void {
+    if (this.startupTimer) {
+      clearTimeout(this.startupTimer);
+      this.startupTimer = null;
+    }
+    const command = this.startupCommand.trim();
+    if (!command || this.disposed) return;
+    this.startupTimer = setTimeout(() => {
+      this.startupTimer = null;
+      if (this.disposed) return;
+      // Envia direto ao PTY: não mexe no foco/seleção de uma janela em segundo
+      // plano e executa o comando com Enter.
+      const bytes = new TextEncoder().encode(`${command}\r`);
+      void writeTerminal(this.id, bytes).catch(() => {});
+    }, 500);
+  }
+
+  private cancelStartupCommand(): void {
+    if (this.startupTimer) {
+      clearTimeout(this.startupTimer);
+      this.startupTimer = null;
+    }
+  }
+
   private onPtyEvent(event: PtyEvent): void {
     if (event.kind === "data" && event.data) {
       const decoded = atob(event.data);
@@ -404,10 +464,11 @@ export class TerminalWindow {
     // Uma janela maximizada acompanha o viewport também quando o zoom muda.
     if (this.maximized) {
       const rect = this.canvas.worldRectVisible();
+      const inset = this.canvas.topInset / zoom;
       this.x = rect.x;
-      this.y = rect.y;
+      this.y = rect.y + inset;
       this.w = rect.w;
-      this.h = rect.h;
+      this.h = Math.max(80, rect.h - inset);
     }
     this.element.style.left = `${this.x * zoom}px`;
     this.element.style.top = `${this.y * zoom}px`;
@@ -449,6 +510,9 @@ export class TerminalWindow {
     // Garante que o xterm meça a célula agora que a janela está no DOM: uma
     // área restaurada pode ter sido criada fora do documento.
     this.term.refresh(0, Math.max(0, this.term.rows - 1));
+    // Faz o ajuste imediato (sem esperar o throttle) para a janela maximizada
+    // já aparecer no tamanho final, sem o “pulo” de layout.
+    this.fit();
     this.scheduleFit();
   }
 
@@ -498,6 +562,9 @@ export class TerminalWindow {
     }
     this.render(this.canvas.zoom);
     this.renderHeaderTabs();
+    // Aplica o novo tamanho ao xterm imediatamente; o scheduleFit fica como
+    // redundância para medições de fonte.
+    this.fit();
     this.scheduleFit();
     this.onChange?.();
   }
@@ -574,6 +641,7 @@ export class TerminalWindow {
       h: this.h,
       maximized: false,
       minimized: false,
+      startupCommand: this.startupCommand,
     };
   }
 
@@ -650,6 +718,7 @@ export class TerminalWindow {
   close(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.cancelStartupCommand();
     offPtyData(this.id);
     killTerminal(this.id);
     this.term.dispose();
@@ -659,6 +728,7 @@ export class TerminalWindow {
   }
 
   dispose(): void {
+    this.cancelStartupCommand();
     if (!this.disposed) {
       this.disposed = true;
       offPtyData(this.id);
@@ -676,6 +746,7 @@ export class TerminalWindow {
    * uma área de trabalho inteira).
    */
   destroy(): void {
+    this.cancelStartupCommand();
     if (!this.disposed) {
       this.disposed = true;
       offPtyData(this.id);
@@ -703,6 +774,7 @@ export class TerminalWindow {
       h: this.h,
       maximized: this.maximized,
       minimized: this.element.classList.contains("minimized"),
+      startupCommand: this.startupCommand,
       savedGeom: this.savedGeom,
     };
   }
@@ -718,6 +790,7 @@ export class TerminalWindow {
     titlebar.addEventListener("mousedown", (e) => {
       if ((e.target as HTMLElement).closest(".term-controls")) return;
       if ((e.target as HTMLElement).closest(".term-tabs")) return;
+      if ((e.target as HTMLElement).closest(".term-menu-btn")) return;
       if ((e.target as HTMLElement).isContentEditable) return;
       dragging = true;
       startX = e.clientX;

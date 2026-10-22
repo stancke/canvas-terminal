@@ -123,7 +123,8 @@ trocar de aba.
 - **+** cria uma nova área com um terminal no centro.
 - Clique em uma aba para trocar de área; clique em **×** para fechar (com
   confirmação se houver terminais).
-- **Duplo clique no nome da aba** renomeia a área.
+- **Duplo clique** no nome da aba ou **botão direito → Renomear área de
+  trabalho** muda o nome.
 - `Ctrl+Shift+T` cria uma área; `Ctrl+Tab` e `Ctrl+Shift+Tab` alternam.
 - O menu **Janela** também traz essas ações.
 
@@ -133,9 +134,30 @@ clique em qualquer nome para trocar de área e maximizar aquele terminal, mesmo
 que ele esteja em outra área (inclusive uma que ainda não tinha sido aberta nesta
 sessão). Fora do modo maximizado, a visão normal do canvas é mantida.
 
+No modo maximizado o cabeçalho do app **não desce mais por hover**. O primeiro
+item antes das abas é o botão **☰**, que abre/fecha o cabeçalho sob demanda;
+enquanto ele está aberto, o terminal é deslocado para baixo para não cobrir as
+abas. `Esc` ou um clique fora também fecham o cabeçalho.
+
 Ao fechar o aplicativo, o perfil completo é salvo automaticamente: áreas,
 nomes, posição, tamanho, estado minimizado/maximizado, zoom, pan, terminal em
 foco e qual área estava ativa. Ao abrir novamente, tudo volta como estava.
+
+---
+
+## Comando automático por terminal
+
+Cada terminal pode ter um comando executado automaticamente ao abrir. Para
+configurar:
+
+- clique com o **botão direito no título do terminal** → **Comando de
+  inicialização...**; ou
+- use **Janela → Comando de inicialização...** com o terminal em foco.
+
+O comando fica salvo no perfil e roda cerca de meio segundo depois que o shell
+sobe, tanto ao iniciar o aplicativo quanto ao reiniciar o terminal. Deixe o
+campo vazio para desativar. Terminais de áreas que ainda não foram abertas
+executam o comando quando a área é restaurada.
 
 ---
 

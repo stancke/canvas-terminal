@@ -33,6 +33,8 @@ import { initTheme, onThemeChange, themeLabel, toggleTheme } from "./theme";
 
 const DEFAULT_W = 720;
 const DEFAULT_H = 420;
+/** Altura do cabeçalho fixo quando há terminal maximizado. */
+const HEADER_HEIGHT = 42;
 
 interface Workspace {
   id: string;
@@ -54,6 +56,7 @@ let focusedTerminal: TerminalWindow | null = null;
 let zCounter = 10;
 let quickCommands: QuickCommand[] = [];
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
+let toolbarForcedOpen = false;
 let workspaces: Workspace[] = [];
 let activeWorkspace: Workspace | null = null;
 
@@ -178,6 +181,7 @@ async function createTerminalForWorkspace(
   y: number,
   w: number,
   h: number,
+  startupCommand = "",
 ): Promise<TerminalWindow> {
   const terminal = await createTerminal(canvas, shellId, cwd, title, x, y, w, h);
   terminal.element.style.zIndex = String(++zCounter);
@@ -219,6 +223,7 @@ async function createTerminalForWorkspace(
       state.h,
       state.cwd,
       state.title,
+      state.startupCommand,
     );
   };
   terminal.onChange = () => {
@@ -227,6 +232,9 @@ async function createTerminalForWorkspace(
   };
   terminal.onRequestTerminalTabs = () => terminalTabGroups();
   terminal.onSelectTerminalTab = (ref) => void selectTerminalTab(ref);
+  terminal.onToggleAppMenu = () => toggleMaximizedAppMenu();
+  terminal.startupCommand = startupCommand.trim();
+  if (terminal.startupCommand) terminal.scheduleStartupCommand();
 
   return terminal;
 }
@@ -240,6 +248,7 @@ async function addTerminalToWorkspace(
   h: number,
   cwd?: string,
   title?: string,
+  startupCommand?: string,
 ): Promise<TerminalWindow> {
   const cwdPath = cwd || (await defaultCwd());
   const terminalTitle = terminalTitleFor(workspace, shellId, title);
@@ -252,6 +261,7 @@ async function addTerminalToWorkspace(
     y,
     w,
     h,
+    startupCommand,
   );
 
   workspace.terminals.push(terminal);
@@ -355,6 +365,10 @@ function bindMenuActions(): void {
   on("menu-cycle", () => cycleFocus(1));
   on("menu-maximize", () => focusedTerminal?.toggleMaximize());
   on("menu-minimize", () => focusedTerminal?.toggleMinimize());
+  on("menu-startup-command", () => {
+    if (focusedTerminal) editStartupCommand(focusedTerminal);
+    else flashHint("Selecione um terminal para configurar o comando.");
+  });
 
   on("menu-shortcuts", () => showShortcutsDialog());
   on("menu-about", () => showAboutDialog());
@@ -441,6 +455,46 @@ function showAboutDialog(): void {
      TypeScript e xterm.js.</p>
      <p>Terminais, zoom e posição são salvos automaticamente.</p>`,
   );
+}
+
+/** Configura o comando automático de um terminal, salvo no perfil. */
+function editStartupCommand(terminal: TerminalWindow): void {
+  showConfirm(
+    "Comando de inicialização",
+    `<p>Este comando será executado automaticamente quando o terminal abrir:
+     ao iniciar o app ou reiniciar o terminal.</p>
+     <input id="startup-command-input" class="dialog-input" type="text"
+       maxlength="2000" placeholder="Ex.: npm run dev" />
+     <p class="dialog-hint">Deixe em branco para desativar.</p>`,
+    "Salvar",
+    () => {
+      const input = document.getElementById(
+        "startup-command-input",
+      ) as HTMLInputElement | null;
+      const command = input?.value.trim() ?? "";
+      terminal.setStartupCommand(command);
+      flashHint(
+        command
+          ? "Comando de inicialização salvo."
+          : "Comando de inicialização removido.",
+      );
+    },
+  );
+
+  const input = document.getElementById(
+    "startup-command-input",
+  ) as HTMLInputElement | null;
+  if (input) {
+    input.value = terminal.startupCommand;
+    input.focus();
+    input.select();
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        (document.getElementById("dialog-confirm") as HTMLButtonElement | null)?.click();
+      }
+    });
+  }
 }
 
 async function quitApp(): Promise<void> {
@@ -762,6 +816,7 @@ async function instantiateWorkspace(workspace: Workspace): Promise<void> {
         base.y,
         base.w,
         base.h,
+        item.startupCommand,
       );
       if (item.maximized && item.geom) {
         terminal.savedGeom = {
@@ -775,6 +830,7 @@ async function instantiateWorkspace(workspace: Workspace): Promise<void> {
           h: item.geom.h,
           maximized: false,
           minimized: false,
+          startupCommand: item.geom.startupCommand ?? item.startupCommand,
         };
         terminal.maximized = true;
       }
@@ -992,6 +1048,13 @@ function renderWorkspaceTabs(): void {
     });
     tab.appendChild(name);
 
+    tab.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if ((event.target as HTMLElement).closest(".tab-close")) return;
+      showWorkspaceTabContextMenu(event.clientX, event.clientY, workspace, name);
+    });
+
     if (workspaces.length > 1) {
       const close = document.createElement("button");
       close.type = "button";
@@ -1023,6 +1086,27 @@ function renderWorkspaceTabs(): void {
   list
     .querySelector<HTMLElement>(".workspace-tab.active")
     ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function showWorkspaceTabContextMenu(
+  x: number,
+  y: number,
+  workspace: Workspace,
+  nameEl: HTMLElement,
+): void {
+  const items = [
+    {
+      label: "Renomear área de trabalho",
+      action: () => startWorkspaceRename(workspace, nameEl),
+    },
+  ];
+  if (workspaces.length > 1) {
+    items.push({
+      label: "Fechar área de trabalho",
+      action: () => requestCloseWorkspace(workspace),
+    });
+  }
+  renderContextMenu(items, x, y);
 }
 
 function startWorkspaceRename(workspace: Workspace, nameEl: HTMLElement): void {
@@ -1135,6 +1219,8 @@ function bindAutoHideToolbar(): void {
       clearTimeout(hideTimer);
       hideTimer = null;
     }
+    // No modo maximizado o cabeçalho só abre pelo botão ☰.
+    if (document.body.classList.contains("terminal-maximized")) return;
     bar.classList.add("visible");
   };
 
@@ -1142,8 +1228,8 @@ function bindAutoHideToolbar(): void {
     if (hideTimer) clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
       hideTimer = null;
-      // Não esconde enquanto o usuário interage com a barra (select, foco)
-      // ou enquanto um submenu estiver aberto.
+      // O cabeçalho aberto pelo botão do modo maximizado não fecha sozinho.
+      if (document.body.classList.contains("terminal-maximized")) return;
       if (bar.contains(document.activeElement)) return;
       if (bar.querySelector(".menu.open")) return;
       if (bar.matches(":hover")) return;
@@ -1157,6 +1243,22 @@ function bindAutoHideToolbar(): void {
   bar.addEventListener("mouseleave", () => scheduleHide());
   bar.addEventListener("focusin", show);
   bar.addEventListener("focusout", () => scheduleHide());
+
+  // Clicar fora do cabeçalho fecha o menu aberto pelo botão ☰.
+  document.addEventListener("click", (event) => {
+    if (!toolbarForcedOpen) return;
+    const target = event.target as HTMLElement;
+    if (
+      bar.contains(target) ||
+      target.closest(".term-menu-btn") ||
+      target.closest("#context-menu")
+    ) {
+      return;
+    }
+    toolbarForcedOpen = false;
+    bar.classList.remove("visible");
+    if (updateMaximizedInset()) refreshMaximizedGeometry();
+  });
 
   // Abre visível por alguns segundos: dá tempo de descobrir os menus antes de
   // a barra se esconder sozinha.
@@ -1227,9 +1329,11 @@ function setFullscreenUi(on: boolean): void {
   if (label) label.textContent = on ? "Sair da tela cheia" : "Tela cheia";
   toolbar.fullscreenBtn.title = on ? "Sair da tela cheia (F11)" : "Tela cheia (F11)";
   toolbar.fullscreenBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  toolbarForcedOpen = false;
   document.getElementById("toolbar")?.classList.remove("visible");
+  syncMaximizedView();
   // O viewport mudou de tamanho: reavalia grid e janelas maximizadas.
-  requestAnimationFrame(() => canvas.requestRender());
+  refreshMaximizedGeometry();
 }
 
 function bindGlobalShortcuts(): void {
@@ -1255,6 +1359,13 @@ function bindGlobalShortcuts(): void {
           return;
         }
         if (closeAllMenus()) {
+          own();
+          return;
+        }
+        if (toolbarForcedOpen) {
+          toolbarForcedOpen = false;
+          document.getElementById("toolbar")?.classList.remove("visible");
+          if (updateMaximizedInset()) refreshMaximizedGeometry();
           own();
           return;
         }
@@ -1398,6 +1509,7 @@ function organizeTerminals(): void {
     term.focus();
   });
   persist();
+  updateStatus();
 }
 
 function centerView(): void {
@@ -1427,6 +1539,64 @@ function resetZoom(): void {
 function updateStatus(): void {
   toolbar.zoom.textContent = `${Math.round(canvas.zoom * 100)}%`;
   toolbar.count.textContent = String(canvas.getAllTerminals().length);
+  syncMaximizedView();
+}
+
+/**
+ * No modo maximizado o cabeçalho não desce mais por hover. Ele é aberto pelo
+ * botão ☰ da barra de abas (primeiro item) e, enquanto aberto, o terminal é
+ * empurrado para baixo para não cobrir as abas.
+ */
+function syncMaximizedView(): void {
+  const maximized = canvas
+    .getAllTerminals()
+    .some((terminal) => terminal.maximized);
+  const wasMaximized = document.body.classList.contains("terminal-maximized");
+  const changed = maximized !== wasMaximized;
+
+  if (changed) {
+    document.body.classList.toggle("terminal-maximized", maximized);
+    toolbarForcedOpen = false;
+    document.getElementById("toolbar")?.classList.remove("visible");
+    closeAllMenus();
+  }
+
+  if (updateMaximizedInset() || changed) {
+    refreshMaximizedGeometry();
+  }
+}
+
+/** Atualiza o inset do topo conforme o cabeçalho está aberto e há maximizado. */
+function updateMaximizedInset(): boolean {
+  const bar = document.getElementById("toolbar");
+  const maximized = document.body.classList.contains("terminal-maximized");
+  const headerOpen = !!bar?.classList.contains("visible");
+  const inset = maximized && headerOpen ? HEADER_HEIGHT : 0;
+  if (canvas.topInset === inset) return false;
+  canvas.topInset = inset;
+  return true;
+}
+
+/** Re-renderiza o canvas e reajusta o xterm após mudanças de geometria. */
+function refreshMaximizedGeometry(): void {
+  canvas.requestRender();
+  requestAnimationFrame(() => {
+    for (const terminal of canvas.getAllTerminals()) {
+      if (terminal.maximized) terminal.refit();
+    }
+  });
+}
+
+/** Botão ☰ das abas maximizadas: abre/fecha o cabeçalho do app. */
+function toggleMaximizedAppMenu(): void {
+  if (!document.body.classList.contains("terminal-maximized")) return;
+  const bar = document.getElementById("toolbar");
+  if (!bar) return;
+
+  toolbarForcedOpen = !toolbarForcedOpen;
+  bar.classList.toggle("visible", toolbarForcedOpen);
+  if (!toolbarForcedOpen) closeAllMenus();
+  if (updateMaximizedInset()) refreshMaximizedGeometry();
 }
 
 function trackMouseCoordinates(): void {
@@ -1504,6 +1674,12 @@ async function showEmptyContextMenu(point: { x: number; y: number }): Promise<vo
 function showTitlebarContextMenu(x: number, y: number, terminal: TerminalWindow): void {
   const items = [
     { label: "Renomear", action: () => terminal.rename() },
+    {
+      label: terminal.startupCommand
+        ? "Editar comando de inicialização..."
+        : "Comando de inicialização...",
+      action: () => editStartupCommand(terminal),
+    },
     { label: "Reiniciar", action: () => terminal.restart() },
     { label: terminal.maximized ? "Restaurar" : "Maximizar", action: () => terminal.toggleMaximize() },
     { label: "Fechar", action: () => terminal.close() },

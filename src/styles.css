@@ -476,6 +476,30 @@ body {
   margin: 0 0 10px;
 }
 
+.dialog-input {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 2px 0 0;
+  padding: 6px 8px;
+  background: var(--window);
+  border: 1px solid var(--window-border);
+  border-radius: 5px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.dialog-input:focus {
+  border-color: var(--accent-dim);
+}
+
+.dialog-hint {
+  margin: 6px 0 0 !important;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
@@ -595,6 +619,36 @@ body {
   height: calc(10px * var(--z, 1));
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+/* Botão de menu: aparece só no modo maximizado, antes das abas. */
+.term-menu-btn {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: calc(20px * var(--z, 1));
+  height: calc(20px * var(--z, 1));
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: calc(4px * var(--z, 1));
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.term-window.maximized .term-menu-btn {
+  display: flex;
+}
+
+.term-menu-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.term-menu-btn svg {
+  width: calc(13px * var(--z, 1));
+  height: calc(13px * var(--z, 1));
 }
 
 .term-dot.pwsh { background: #539bf5; }
