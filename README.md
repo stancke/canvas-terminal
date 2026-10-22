@@ -128,6 +128,11 @@ trocar de aba.
 - `Ctrl+Shift+T` cria uma área; `Ctrl+Tab` e `Ctrl+Shift+Tab` alternam.
 - O menu **Janela** também traz essas ações.
 
+No modo maximizado, **arraste os nomes dos terminais** para reordená-los dentro
+do grupo, ou **arraste o nome da área** para mover o grupo inteiro para a
+esquerda/direita. A ordem fica salva no perfil e afeta apenas a faixa de abas
+maximizada — as janelas do canvas e a ordem das abas do cabeçalho não mudam.
+
 Quando um terminal está **maximizado**, o cabeçalho dele vira uma barra de abas
 **agrupada por área de trabalho**. Cada grupo mostra os terminais daquela área;
 clique em qualquer nome para trocar de área e maximizar aquele terminal, mesmo
@@ -185,6 +190,7 @@ você confirmar.
 | Atalho | Ação |
 |--------|------|
 | `Ctrl+T` (ou `Cmd+T`) | Novo terminal no centro do viewport |
+| `Ctrl+S` (ou `Cmd+S`) | Salvar o perfil completo imediatamente |
 | `Ctrl+Shift+T` | Nova área de trabalho |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Próxima / área de trabalho anterior |
 | `Ctrl+Q` (ou `Cmd+Q`) | Sair do aplicativo |
@@ -236,6 +242,10 @@ automaticamente em:
 ```
 localStorage["canvas-terminal.workspaces.v1"]
 ```
+
+Use **Arquivo → Salvar** ou `Ctrl+S` para gravar imediatamente; ao concluir,
+aparece um aviso verde no canto superior direito. A ordem das abas maximizadas
+também faz parte do perfil.
 
 O layout antigo de área única (`canvas-terminal.layout.v1`) é migrado
 automaticamente para a primeira área na primeira execução desta versão.

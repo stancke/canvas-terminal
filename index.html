@@ -44,6 +44,11 @@
               <span class="menu-shortcut">Ctrl+Shift+W</span>
             </button>
             <div class="menu-separator"></div>
+            <button class="menu-item" id="menu-save" role="menuitem">
+              <span class="menu-label">Salvar</span>
+              <span class="menu-shortcut">Ctrl+S</span>
+            </button>
+            <div class="menu-separator"></div>
             <button class="menu-item" id="menu-quit" role="menuitem">
               <span class="menu-label">Sair</span>
               <span class="menu-shortcut">Ctrl+Q</span>
@@ -187,6 +192,8 @@
         </div>
       </div>
     </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
     <main id="viewport" tabindex="-1">
       <div id="world"></div>

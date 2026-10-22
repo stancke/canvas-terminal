@@ -4,8 +4,10 @@ import { Canvas } from "./canvas";
 import {
   createTerminal,
   TerminalWindow,
+  type TerminalGroupReorderDetail,
   type TerminalTabGroup,
   type TerminalTabRef,
+  type TerminalTabReorderDetail,
 } from "./terminal-window";
 import {
   defaultCwd,
@@ -56,9 +58,12 @@ let focusedTerminal: TerminalWindow | null = null;
 let zCounter = 10;
 let quickCommands: QuickCommand[] = [];
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
 let toolbarForcedOpen = false;
 let workspaces: Workspace[] = [];
 let activeWorkspace: Workspace | null = null;
+/** Ordem dos grupos (áreas) exibida somente nas abas do modo maximizado. */
+let tabGroupOrder: string[] = [];
 
 const toolbar = {
   shellSelect: document.querySelector<HTMLSelectElement>("#shell-select")!,
@@ -351,6 +356,7 @@ function bindMenuActions(): void {
 
   on("menu-new", () => void addTerminalAtCenter());
   on("menu-close-terminal", () => focusedTerminal?.close());
+  on("menu-save", () => saveNow());
   on("menu-quit", () => void quitApp());
 
   on("menu-theme", () => toggleTheme());
@@ -426,6 +432,7 @@ function closeDialog(): boolean {
 function showShortcutsDialog(): void {
   const shortcuts: Array<[string, string]> = [
     ["Novo terminal", "Ctrl+T"],
+    ["Salvar estado do canvas", "Ctrl+S"],
     ["Nova área de trabalho", "Ctrl+Shift+T"],
     ["Próxima / área anterior", "Ctrl+Tab / Ctrl+Shift+Tab"],
     ["Fechar terminal", "Ctrl+Shift+W"],
@@ -796,6 +803,19 @@ function savedToWorkspace(saved: SavedWorkspace): Workspace {
   };
 }
 
+/** Mantém a ordem dos grupos válida, anexando áreas novas ao final. */
+function normalizeTabGroupOrder(order?: string[]): string[] {
+  const ids = new Set(workspaces.map((workspace) => workspace.id));
+  const result: string[] = [];
+  for (const id of order ?? []) {
+    if (ids.has(id) && !result.includes(id)) result.push(id);
+  }
+  for (const workspace of workspaces) {
+    if (!result.includes(workspace.id)) result.push(workspace.id);
+  }
+  return result;
+}
+
 /** Instancia os terminais salvos de uma área na primeira vez que ela abre. */
 async function instantiateWorkspace(workspace: Workspace): Promise<void> {
   if (workspace.initialized) return;
@@ -888,6 +908,10 @@ async function withWorkspaceLock(task: () => Promise<void>): Promise<void> {
 }
 
 async function switchToWorkspace(target: Workspace): Promise<void> {
+  // Prepara a área de destino (spawn dos PTYs) *antes* de desanexar a atual:
+  // assim o usuário não vê um canvas em branco enquanto os terminais sobem.
+  await instantiateWorkspace(target);
+
   if (activeWorkspace) {
     activeWorkspace.view = {
       panX: canvas.panX,
@@ -914,6 +938,7 @@ async function restoreWorkspaces(): Promise<void> {
 
   if (layout) {
     workspaces = layout.workspaces.map(savedToWorkspace);
+    tabGroupOrder = normalizeTabGroupOrder(layout.tabGroupOrder);
     const active =
       workspaces.find((workspace) => workspace.id === layout.activeId) ??
       workspaces[0];
@@ -921,6 +946,7 @@ async function restoreWorkspaces(): Promise<void> {
   } else {
     const workspace = makeWorkspace("Área 1");
     workspaces = [workspace];
+    tabGroupOrder = normalizeTabGroupOrder();
     await showWorkspace(workspace);
   }
 
@@ -931,6 +957,7 @@ async function createWorkspace(): Promise<void> {
   await withWorkspaceLock(async () => {
     const workspace = makeWorkspace(undefined, { panX: 0, panY: 0, zoom: 1 });
     workspaces.push(workspace);
+    tabGroupOrder.push(workspace.id);
     renderWorkspaceTabs();
     notifyTerminalTabsChanged();
     await switchToWorkspace(workspace);
@@ -950,31 +977,116 @@ function notifyTerminalTabsChanged(): void {
   document.dispatchEvent(new CustomEvent("canvas-terminals-changed"));
 }
 
+function moveArrayItem<T>(
+  list: T[],
+  fromIndex: number,
+  toItem: T,
+  after: boolean,
+): void {
+  if (fromIndex < 0) return;
+  const fromItem = list[fromIndex];
+  if (!fromItem || fromItem === toItem) return;
+
+  list.splice(fromIndex, 1);
+  let insert = list.indexOf(toItem);
+  if (insert < 0) return;
+  if (after) insert += 1;
+  list.splice(insert, 0, fromItem);
+}
+
+/** Reordena abas de terminal dentro do grupo (só afeta a faixa maximizada). */
+function reorderTerminalTab(detail: TerminalTabReorderDetail): void {
+  const workspace = workspaces.find(
+    (entry) => entry.id === detail.from.workspaceId,
+  );
+  if (!workspace || workspace.id !== detail.to.workspaceId) return;
+
+  if (workspace.initialized) {
+    const list = workspace.terminals;
+    const fromIndex = list.findIndex(
+      (terminal) => terminal.id === detail.from.terminalId,
+    );
+    const toItem = list.find(
+      (terminal) => terminal.id === detail.to.terminalId,
+    );
+    if (!toItem) return;
+    moveArrayItem(list, fromIndex, toItem, detail.after);
+    const focusedIndex = list.findIndex(
+      (terminal) => terminal.id === workspace.lastFocusedId,
+    );
+    if (focusedIndex >= 0) workspace.focusedIndex = focusedIndex;
+  } else {
+    const list = workspace.pending;
+    const fromIndex = detail.from.pendingIndex ?? -1;
+    const toIndex = detail.to.pendingIndex ?? -1;
+    const toItem = list[toIndex];
+    if (!toItem) return;
+    const focusedItem =
+      workspace.focusedIndex !== undefined
+        ? list[workspace.focusedIndex]
+        : undefined;
+    moveArrayItem(list, fromIndex, toItem, detail.after);
+    if (focusedItem) {
+      const focusedIndex = list.indexOf(focusedItem);
+      if (focusedIndex >= 0) workspace.focusedIndex = focusedIndex;
+    }
+  }
+
+  notifyTerminalTabsChanged();
+  persist();
+}
+
+/** Reordena os grupos de áreas (somente a ordem da faixa maximizada). */
+function reorderTerminalGroup(detail: TerminalGroupReorderDetail): void {
+  if (detail.fromId === detail.toId) return;
+
+  const order = normalizeTabGroupOrder(tabGroupOrder);
+  const fromIndex = order.indexOf(detail.fromId);
+  const toIndex = order.indexOf(detail.toId);
+  if (fromIndex < 0 || toIndex < 0) return;
+
+  const [moved] = order.splice(fromIndex, 1);
+  let insert = order.indexOf(detail.toId);
+  if (insert < 0) return;
+  if (detail.after) insert += 1;
+  order.splice(insert, 0, moved);
+
+  tabGroupOrder = order;
+  notifyTerminalTabsChanged();
+  persist();
+}
+
 /** Grupos exibidos nas abas do terminal maximizado: todas as áreas. */
 function terminalTabGroups(): TerminalTabGroup[] {
-  return workspaces
-    .map((workspace) => {
-      const isActive = workspace === activeWorkspace;
-      const terminals: TerminalTabRef[] = workspace.initialized
-        ? workspace.terminals.map((terminal) => ({
-            workspaceId: workspace.id,
-            terminalId: terminal.id,
-            label: terminal.title,
-          }))
-        : workspace.pending.map((saved, index) => ({
-            workspaceId: workspace.id,
-            pendingIndex: index,
-            label: saved.title || `Terminal ${index + 1}`,
-          }));
+  const groups: TerminalTabGroup[] = [];
 
-      return {
-        workspaceId: workspace.id,
-        workspaceName: workspace.name,
-        activeWorkspace: isActive,
-        terminals,
-      };
-    })
-    .filter((group) => group.terminals.length > 0);
+  for (const id of normalizeTabGroupOrder(tabGroupOrder)) {
+    const workspace = workspaces.find((entry) => entry.id === id);
+    if (!workspace) continue;
+
+    const isActive = workspace === activeWorkspace;
+    const terminals: TerminalTabRef[] = workspace.initialized
+      ? workspace.terminals.map((terminal) => ({
+          workspaceId: workspace.id,
+          terminalId: terminal.id,
+          label: terminal.title,
+        }))
+      : workspace.pending.map((saved, index) => ({
+          workspaceId: workspace.id,
+          pendingIndex: index,
+          label: saved.title || `Terminal ${index + 1}`,
+        }));
+
+    if (terminals.length === 0) continue;
+    groups.push({
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      activeWorkspace: isActive,
+      terminals,
+    });
+  }
+
+  return groups;
 }
 
 /** Clicou numa aba do terminal maximizado: troca de área e maximiza o alvo. */
@@ -1002,7 +1114,14 @@ async function selectTerminalTab(ref: TerminalTabRef): Promise<void> {
     for (const terminal of workspace.terminals) {
       if (terminal !== target && terminal.maximized) terminal.toggleMaximize();
     }
-    if (!target.maximized) target.toggleMaximize();
+    if (!target.maximized) {
+      target.toggleMaximize();
+    } else {
+      // Garante que a janela já maximizada seja reposicionada/redimensionada
+      // e que a faixa de abas seja exibida após a troca de área.
+      target.render(canvas.zoom);
+      target.refit();
+    }
     target.focus();
     persist();
   });
@@ -1023,6 +1142,17 @@ function bindWorkspaceTabs(): void {
     },
     { passive: false },
   );
+
+  document.addEventListener("terminal-tab-reorder", ((event: Event) => {
+    reorderTerminalTab(
+      (event as CustomEvent<TerminalTabReorderDetail>).detail,
+    );
+  }) as EventListener);
+  document.addEventListener("terminal-group-reorder", ((event: Event) => {
+    reorderTerminalGroup(
+      (event as CustomEvent<TerminalGroupReorderDetail>).detail,
+    );
+  }) as EventListener);
 }
 
 function renderWorkspaceTabs(): void {
@@ -1183,6 +1313,7 @@ async function removeWorkspace(workspace: Workspace): Promise<void> {
     workspace.terminals = [];
     workspace.pending = [];
     workspaces = workspaces.filter((entry) => entry !== workspace);
+    tabGroupOrder = tabGroupOrder.filter((id) => id !== workspace.id);
 
     renderWorkspaceTabs();
     notifyTerminalTabsChanged();
@@ -1353,6 +1484,11 @@ function bindGlobalShortcuts(): void {
         e.stopPropagation();
       };
 
+      if (mod && e.key.toLowerCase() === "s") {
+        own();
+        saveNow();
+        return;
+      }
       if (e.key === "Escape") {
         if (closeDialog()) {
           own();
@@ -1616,6 +1752,7 @@ function persist(): void {
 
   saveWorkspaces({
     activeId: activeWorkspace.id,
+    tabGroupOrder: normalizeTabGroupOrder(tabGroupOrder),
     workspaces: workspaces.map((workspace) => {
       let focusedIndex = workspace.focusedIndex;
       if (workspace.initialized) {
@@ -1635,6 +1772,25 @@ function persist(): void {
       };
     }),
   });
+}
+
+/** Salvamento manual (Ctrl+S / Arquivo → Salvar) com aviso de sucesso. */
+function saveNow(): void {
+  persist();
+  flushSave();
+  showToast("Perfil salvo com sucesso");
+}
+
+function showToast(message: string): void {
+  const toast = document.getElementById("toast");
+  if (!toast) return;
+  if (toastTimer) clearTimeout(toastTimer);
+  toast.textContent = `✓ ${message}`;
+  toast.classList.add("visible");
+  toastTimer = setTimeout(() => {
+    toastTimer = null;
+    toast.classList.remove("visible");
+  }, 2600);
 }
 
 function bindContextMenu(): void {

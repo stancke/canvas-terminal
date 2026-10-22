@@ -45,6 +45,21 @@ export interface TerminalTabGroup {
   terminals: TerminalTabRef[];
 }
 
+export interface TerminalTabReorderDetail {
+  from: TerminalTabRef;
+  to: TerminalTabRef;
+  after: boolean;
+}
+
+export interface TerminalGroupReorderDetail {
+  fromId: string;
+  toId: string;
+  after: boolean;
+}
+
+/** Evita que um clique seja disparado ao final de um arrasto de aba. */
+let suppressTabClick = false;
+
 const MIN_W = 240;
 const MIN_H = 140;
 /** Tamanho da fonte do terminal em zoom 100%. */
@@ -586,7 +601,9 @@ export class TerminalWindow {
       const groupName = document.createElement("span");
       groupName.className = "term-tab-group-name";
       groupName.textContent = group.workspaceName;
-      groupName.title = group.workspaceName;
+      groupName.title = `${group.workspaceName} — arraste para reordenar o grupo`;
+      groupName.dataset.workspaceId = group.workspaceId;
+      this.setupTabDrag(groupName, "group", { workspaceId: group.workspaceId });
       groupEl.appendChild(groupName);
 
       for (const ref of group.terminals) {
@@ -600,16 +617,29 @@ export class TerminalWindow {
           String(ref.terminalId !== undefined && ref.terminalId === this.id),
         );
         tab.tabIndex = 0;
-        tab.title = ref.label;
+        tab.title = `${ref.label} — arraste para reordenar`;
+        tab.dataset.workspaceId = ref.workspaceId;
+        tab.dataset.label = ref.label;
+        if (ref.terminalId !== undefined) {
+          tab.dataset.terminalId = String(ref.terminalId);
+        }
+        if (ref.pendingIndex !== undefined) {
+          tab.dataset.pendingIndex = String(ref.pendingIndex);
+        }
 
         const label = document.createElement("span");
         label.className = "term-tab-name";
         label.textContent = ref.label;
         tab.appendChild(label);
+        this.setupTabDrag(tab, "terminal", ref);
 
         tab.addEventListener("mousedown", (event) => event.stopPropagation());
         tab.addEventListener("click", (event) => {
           event.stopPropagation();
+          if (suppressTabClick) {
+            suppressTabClick = false;
+            return;
+          }
           this.onSelectTerminalTab?.(ref);
         });
         tab.addEventListener("keydown", (event) => {
@@ -627,6 +657,138 @@ export class TerminalWindow {
     this.tabsEl
       .querySelector<HTMLElement>(".term-tab.active")
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  /** Arrasto horizontal para reordenar abas de terminal ou grupos de área. */
+  private setupTabDrag(
+    handle: HTMLElement,
+    kind: "terminal" | "group",
+    payload: TerminalTabRef | { workspaceId: string },
+  ): void {
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      if ((event.target as HTMLElement).isContentEditable) return;
+
+      const startX = event.clientX;
+      const startY = event.clientY;
+      let dragging = false;
+      let dropTarget: HTMLElement | null = null;
+      const selector = kind === "terminal" ? ".term-tab" : ".term-tab-group-name";
+
+      const clearDropTarget = () => {
+        dropTarget?.classList.remove("drop-before", "drop-after");
+        dropTarget = null;
+      };
+
+      const finish = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onCancel);
+        window.removeEventListener("blur", onCancel);
+        handle.classList.remove("dragging");
+        clearDropTarget();
+      };
+
+      const onCancel = () => {
+        dragging = false;
+        finish();
+      };
+
+      const onMove = (move: PointerEvent) => {
+        if (!dragging) {
+          if (
+            Math.abs(move.clientX - startX) + Math.abs(move.clientY - startY) <
+            6
+          ) {
+            return;
+          }
+          dragging = true;
+          handle.classList.add("dragging");
+        }
+        move.preventDefault();
+
+        const el = document.elementFromPoint(
+          move.clientX,
+          move.clientY,
+        ) as HTMLElement | null;
+        const candidate = el?.closest<HTMLElement>(selector) ?? null;
+        if (candidate !== dropTarget) {
+          clearDropTarget();
+          dropTarget = candidate;
+        }
+        if (dropTarget) {
+          const rect = dropTarget.getBoundingClientRect();
+          const after = move.clientX > rect.left + rect.width / 2;
+          dropTarget.classList.toggle("drop-after", after);
+          dropTarget.classList.toggle("drop-before", !after);
+        }
+      };
+
+      const onUp = (up: PointerEvent) => {
+        const wasDragging = dragging;
+        finish();
+        if (!wasDragging) return;
+
+        suppressTabClick = true;
+        setTimeout(() => {
+          suppressTabClick = false;
+        }, 250);
+
+        const el = document.elementFromPoint(
+          up.clientX,
+          up.clientY,
+        ) as HTMLElement | null;
+        const target = el?.closest<HTMLElement>(selector) ?? null;
+        if (!target || target === handle) return;
+
+        const rect = target.getBoundingClientRect();
+        const after = up.clientX > rect.left + rect.width / 2;
+
+        if (kind === "terminal") {
+          const to = this.tabRefFromElement(target);
+          const from = payload as TerminalTabRef;
+          if (to && to.workspaceId === from.workspaceId) {
+            document.dispatchEvent(
+              new CustomEvent<TerminalTabReorderDetail>("terminal-tab-reorder", {
+                detail: { from, to, after },
+              }),
+            );
+          }
+        } else {
+          const toId = target.dataset.workspaceId;
+          const fromId = (payload as { workspaceId: string }).workspaceId;
+          if (toId && toId !== fromId) {
+            document.dispatchEvent(
+              new CustomEvent<TerminalGroupReorderDetail>("terminal-group-reorder", {
+                detail: { fromId, toId, after },
+              }),
+            );
+          }
+        }
+      };
+
+      window.addEventListener("pointermove", onMove, { passive: false });
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+      window.addEventListener("blur", onCancel);
+    });
+  }
+
+  private tabRefFromElement(element: HTMLElement): TerminalTabRef | null {
+    const workspaceId = element.dataset.workspaceId;
+    if (!workspaceId) return null;
+    const terminalId = element.dataset.terminalId
+      ? Number(element.dataset.terminalId)
+      : undefined;
+    const pendingIndex = element.dataset.pendingIndex
+      ? Number(element.dataset.pendingIndex)
+      : undefined;
+    return {
+      workspaceId,
+      terminalId,
+      pendingIndex,
+      label: element.dataset.label ?? "",
+    };
   }
 
   private saveGeom(): void {

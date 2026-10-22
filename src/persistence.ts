@@ -43,6 +43,8 @@ export interface SavedWorkspace {
 export interface SavedWorkspaceLayout {
   activeId: string;
   workspaces: SavedWorkspace[];
+  /** Ordem dos grupos de abas no modo maximizado (independente do canvas). */
+  tabGroupOrder?: string[];
 }
 
 interface LegacyLayout {
@@ -162,7 +164,13 @@ function parseWorkspaceLayout(value: unknown): SavedWorkspaceLayout | null {
       ? layout.activeId
       : workspaces[0].id;
 
-  return { activeId, workspaces };
+  const tabGroupOrder = Array.isArray(layout.tabGroupOrder)
+    ? layout.tabGroupOrder.filter(
+        (id): id is string => typeof id === "string" && id.length > 0,
+      )
+    : undefined;
+
+  return { activeId, workspaces, tabGroupOrder };
 }
 
 function migrateLegacy(): SavedWorkspaceLayout | null {
