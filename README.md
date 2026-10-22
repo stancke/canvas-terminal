@@ -109,8 +109,9 @@ escalam juntos, sem reflow do conteúdo. Vá de 25% a 300% com `Ctrl + roda do
 mouse`, `Ctrl+=` / `Ctrl+-` ou pelo menu **Exibir**.
 
 Para navegar sem o mouse, clique em uma área vazia do canvas e use **WASD** ou
-as **setas** (segure para pan contínuo). Clicar em um terminal devolve o foco ao
-shell.
+as **setas** (segure para pan contínuo). Ainda nesse modo, **Q** e **E** trocam
+para a área de trabalho anterior/seguinte. Clicar em um terminal devolve o foco
+ao shell.
 
 ---
 
@@ -208,6 +209,7 @@ você confirmar.
 | `Espaço + arrastar` | Pan do canvas |
 | `Botão do meio` / `botão direito` | Pan do canvas |
 | `WASD` / setas | Navegar no canvas (clique antes em uma área vazia) |
+| `Q` / `E` | Trocar para a área de trabalho anterior/seguinte (modo navegação) |
 | `Ctrl + roda do mouse` | Zoom no cursor |
 | `Shift + roda do mouse` | Pan horizontal |
 

@@ -444,6 +444,7 @@ function showShortcutsDialog(): void {
     ["Resetar zoom", "Ctrl+0"],
     ["Pan do canvas", "Espaço + arrastar · botão do meio"],
     ["Navegar no canvas (clique antes em área vazia)", "WASD / setas"],
+    ["Trocar de área no canvas", "Q / E"],
     ["Pan horizontal", "Shift + roda do mouse"],
     ["Tela cheia", "F11 / Ctrl+Shift+F"],
     ["Alternar tema", "Ctrl+Shift+L"],
@@ -864,25 +865,69 @@ async function instantiateWorkspace(workspace: Workspace): Promise<void> {
   }
 }
 
+/** Localiza o terminal de uma aba (por id vivo ou índice salvo). */
+function findTerminalByRef(
+  workspace: Workspace,
+  ref: TerminalTabRef,
+): TerminalWindow | undefined {
+  if (ref.terminalId !== undefined) {
+    return workspace.terminals.find(
+      (terminal) => terminal.id === ref.terminalId,
+    );
+  }
+  if (ref.pendingIndex !== undefined) {
+    return workspace.terminals[ref.pendingIndex];
+  }
+  return undefined;
+}
+
+/** Maximiza o terminal escolhido e restaura os demais maximizados da área. */
+function maximizeWorkspaceTerminal(
+  workspace: Workspace,
+  target: TerminalWindow,
+): void {
+  for (const terminal of workspace.terminals) {
+    if (terminal !== target && terminal.maximized) terminal.toggleMaximize();
+  }
+  if (!target.maximized) {
+    target.toggleMaximize();
+  } else {
+    // Reaplica geometria/classe e reajusta o xterm após o attach.
+    target.render(canvas.zoom);
+    target.refit();
+  }
+}
+
 /** Anexa a área ao canvas (a view é aplicada antes de posicionar as janelas). */
-async function showWorkspace(workspace: Workspace): Promise<void> {
+async function showWorkspace(
+  workspace: Workspace,
+  focusRef?: TerminalTabRef,
+): Promise<void> {
   await instantiateWorkspace(workspace);
 
   activeWorkspace = workspace;
   canvas.setView(workspace.view.panX, workspace.view.panY, workspace.view.zoom);
   canvas.attachTerminals(workspace.terminals);
 
+  const target = focusRef
+    ? findTerminalByRef(workspace, focusRef)
+    : undefined;
   const maximized = workspace.terminals.find((terminal) => terminal.maximized);
   const preferred =
     workspace.focusedIndex !== undefined
       ? workspace.terminals[workspace.focusedIndex]
       : undefined;
   focusedTerminal =
+    target ??
     maximized ??
     preferred ??
     workspace.terminals.find((terminal) => terminal.id === workspace.lastFocusedId) ??
     workspace.terminals[0] ??
     null;
+
+  if (target) {
+    maximizeWorkspaceTerminal(workspace, target);
+  }
 
   if (focusedTerminal) {
     focusedTerminal.focus();
@@ -907,7 +952,10 @@ async function withWorkspaceLock(task: () => Promise<void>): Promise<void> {
   }
 }
 
-async function switchToWorkspace(target: Workspace): Promise<void> {
+async function switchToWorkspace(
+  target: Workspace,
+  focusRef?: TerminalTabRef,
+): Promise<void> {
   // Prepara a área de destino (spawn dos PTYs) *antes* de desanexar a atual:
   // assim o usuário não vê um canvas em branco enquanto os terminais sobem.
   await instantiateWorkspace(target);
@@ -921,7 +969,7 @@ async function switchToWorkspace(target: Workspace): Promise<void> {
     canvas.detachTerminals();
   }
 
-  await showWorkspace(target);
+  await showWorkspace(target, focusRef);
   persist();
 }
 
@@ -1096,32 +1144,19 @@ async function selectTerminalTab(ref: TerminalTabRef): Promise<void> {
 
   await withWorkspaceLock(async () => {
     if (workspace !== activeWorkspace) {
-      await switchToWorkspace(workspace);
+      // A própria troca já anexa e maximiza o terminal clicado.
+      await switchToWorkspace(workspace, ref);
+      return;
     }
 
-    let target: TerminalWindow | undefined;
-    if (ref.terminalId !== undefined) {
-      target = workspace.terminals.find((terminal) => terminal.id === ref.terminalId);
-    } else if (ref.pendingIndex !== undefined) {
-      target = workspace.terminals[ref.pendingIndex];
-    }
+    let target = findTerminalByRef(workspace, ref);
     if (!target) {
       target = workspace.terminals.find((terminal) => terminal.maximized);
     }
     if (!target) target = workspace.terminals[0];
     if (!target) return;
 
-    for (const terminal of workspace.terminals) {
-      if (terminal !== target && terminal.maximized) terminal.toggleMaximize();
-    }
-    if (!target.maximized) {
-      target.toggleMaximize();
-    } else {
-      // Garante que a janela já maximizada seja reposicionada/redimensionada
-      // e que a faixa de abas seja exibida após a troca de área.
-      target.render(canvas.zoom);
-      target.refit();
-    }
+    maximizeWorkspaceTerminal(workspace, target);
     target.focus();
     persist();
   });
@@ -1489,6 +1524,31 @@ function bindGlobalShortcuts(): void {
         saveNow();
         return;
       }
+
+      // Navegação por teclado no canvas: Q/E trocam de área de trabalho.
+      if (
+        !mod &&
+        !e.shiftKey &&
+        !e.altKey &&
+        canvas.canvasActive &&
+        !document.querySelector('[aria-modal="true"]:not(.hidden)') &&
+        !canvas.getAllTerminals().some((terminal) => terminal.maximized) &&
+        (document.activeElement === canvas.viewport ||
+          document.activeElement === document.body)
+      ) {
+        const key = e.key.toLowerCase();
+        if (key === "q" || key === "e") {
+          own();
+          if (e.repeat) return;
+          await cycleWorkspace(key === "q" ? -1 : 1);
+          // Mantém o modo de navegação para permitir trocar várias áreas.
+          if (!canvas.getAllTerminals().some((terminal) => terminal.maximized)) {
+            canvas.setCanvasActive(true);
+          }
+          return;
+        }
+      }
+
       if (e.key === "Escape") {
         if (closeDialog()) {
           own();
