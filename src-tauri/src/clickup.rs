@@ -29,13 +29,19 @@ fn client() -> Result<&'static reqwest::Client, String> {
 }
 
 async fn get_json(path: &str, token: &str) -> Result<Value, String> {
+    let url = reqwest::Url::parse(&format!("{BASE}{path}"))
+        .map_err(|err| format!("URL inválida do ClickUp: {err}"))?;
+    get_json_url(url, token).await
+}
+
+async fn get_json_url(url: reqwest::Url, token: &str) -> Result<Value, String> {
     let token = token.trim();
     if token.is_empty() {
         return Err("Informe o token pessoal do ClickUp.".into());
     }
 
     let response = client()?
-        .get(format!("{BASE}{path}"))
+        .get(url)
         .header("Authorization", token)
         .header("Accept", "application/json")
         .send()
@@ -78,6 +84,14 @@ pub struct Team {
 pub struct Space {
     pub id: String,
     pub name: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct User {
+    pub id: String,
+    pub username: String,
+    pub email: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -147,6 +161,16 @@ pub struct TaskDetail {
     pub attachments: Vec<Attachment>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Comment {
+    pub id: String,
+    pub text: String,
+    pub author: String,
+    pub date: Option<String>,
+    pub resolved: bool,
+}
+
 /* ---- Comandos ---- */
 
 /// Workspaces (teams) visíveis para o token.
@@ -162,6 +186,22 @@ pub async fn clickup_teams(token: String) -> Result<Vec<Team>, String> {
             })
         })
         .collect())
+}
+
+/// Usuário dono do token (usado pelo filtro “atribuídas a mim”).
+#[tauri::command]
+pub async fn clickup_user(token: String) -> Result<User, String> {
+    let data = get_json("/user", &token).await?;
+    let user = data
+        .get("user")
+        .ok_or_else(|| "Usuário do ClickUp não encontrado.".to_string())?;
+    Ok(User {
+        id: text(user, "id").ok_or_else(|| "Usuário do ClickUp sem id.".to_string())?,
+        username: text(user, "username")
+            .or_else(|| text(user, "email"))
+            .unwrap_or_else(|| "você".into()),
+        email: text(user, "email"),
+    })
 }
 
 #[tauri::command]
@@ -209,15 +249,44 @@ pub async fn clickup_lists(
     Ok(parse_lists(&data))
 }
 
+/// Status configurados na lista (para os filtros do plugin).
+#[tauri::command]
+pub async fn clickup_list_statuses(token: String, list_id: String) -> Result<Vec<Status>, String> {
+    let data = get_json(&format!("/list/{list_id}"), &token).await?;
+    Ok(array(&data, "statuses")
+        .iter()
+        .map(parse_status)
+        .collect())
+}
+
 /// Tarefas da lista (primeira página, ordenadas pelas mais recentes).
 #[tauri::command]
-pub async fn clickup_tasks(token: String, list_id: String) -> Result<Vec<TaskSummary>, String> {
-    let data = get_json(
-        &format!("/list/{list_id}/task?archived=false&page=0&order_by=updated&reverse=true&subtasks=true"),
-        &token,
-    )
-    .await?;
+pub async fn clickup_tasks(
+    token: String,
+    list_id: String,
+    assignees: Vec<String>,
+    statuses: Vec<String>,
+) -> Result<Vec<TaskSummary>, String> {
+    let mut url = reqwest::Url::parse(&format!("{BASE}/list/{list_id}/task"))
+        .map_err(|err| format!("URL inválida do ClickUp: {err}"))?;
+    {
+        let mut query = url.query_pairs_mut();
+        query
+            .append_pair("archived", "false")
+            .append_pair("page", "0")
+            .append_pair("order_by", "updated")
+            .append_pair("reverse", "true")
+            .append_pair("subtasks", "true")
+            .append_pair("include_closed", "true");
+        for assignee in assignees.iter().filter(|id| !id.trim().is_empty()) {
+            query.append_pair("assignees[]", assignee);
+        }
+        for status in statuses.iter().filter(|name| !name.trim().is_empty()) {
+            query.append_pair("statuses[]", status);
+        }
+    }
 
+    let data = get_json_url(url, &token).await?;
     Ok(array(&data, "tasks")
         .iter()
         .filter_map(parse_summary)
@@ -229,6 +298,16 @@ pub async fn clickup_tasks(token: String, list_id: String) -> Result<Vec<TaskSum
 pub async fn clickup_task(token: String, task_id: String) -> Result<TaskDetail, String> {
     let data = get_json(&format!("/task/{task_id}"), &token).await?;
     parse_detail(&data).ok_or_else(|| "Tarefa não encontrada.".to_string())
+}
+
+/// Comentários da tarefa, do mais antigo para o mais recente.
+#[tauri::command]
+pub async fn clickup_comments(token: String, task_id: String) -> Result<Vec<Comment>, String> {
+    let data = get_json(&format!("/task/{task_id}/comment?start=0"), &token).await?;
+    Ok(array(&data, "comments")
+        .iter()
+        .filter_map(parse_comment)
+        .collect())
 }
 
 /* ---- Parsers ---- */
@@ -258,14 +337,24 @@ fn timestamp(value: &Value, key: &str) -> Option<String> {
 }
 
 fn parse_status(value: &Value) -> Status {
-    let status = value.get("status").cloned().unwrap_or(Value::Null);
-    let name = text(&status, "status")
-        .or_else(|| text(value, "status"))
+    // Em tarefas o status é `{ "status": { "status": "...", ... } }`; na lista
+    // de status do list ele vem direto: `{ "status": "...", "color": ... }`.
+    let object = value
+        .get("status")
+        .filter(|candidate| candidate.is_object())
+        .unwrap_or(value);
+    let name = text(object, "status")
+        .or_else(|| {
+            value
+                .get("status")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
         .unwrap_or_else(|| "sem status".into());
     Status {
         name,
-        color: text(&status, "color"),
-        kind: text(&status, "type"),
+        color: text(object, "color"),
+        kind: text(object, "type"),
     }
 }
 
@@ -293,6 +382,38 @@ fn parse_summary(value: &Value) -> Option<TaskSummary> {
         assignees: parse_assignees(value),
         due_date: timestamp(value, "due_date"),
         updated: timestamp(value, "date_updated"),
+    })
+}
+
+fn parse_comment(value: &Value) -> Option<Comment> {
+    let id = text(value, "id")?;
+    let author = value
+        .get("user")
+        .and_then(|user| text(user, "username").or_else(|| text(user, "email")))
+        .unwrap_or_else(|| "Alguém".into());
+    let text = text(value, "comment_text")
+        .or_else(|| {
+            value
+                .get("comment")
+                .and_then(Value::as_array)
+                .map(|blocks| {
+                    blocks
+                        .iter()
+                        .filter_map(|block| text(block, "text"))
+                        .collect::<Vec<_>>()
+                        .join("")
+                })
+        })
+        .unwrap_or_default();
+    Some(Comment {
+        id,
+        text,
+        author,
+        date: timestamp(value, "date"),
+        resolved: value
+            .get("resolved")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
 }
 
@@ -448,6 +569,19 @@ mod tests {
         let summary = parse_summary(&value).expect("resumo");
         assert_eq!(summary.status.name, "done");
         assert!(summary.status.color.is_none());
+    }
+
+    #[test]
+    fn le_status_da_definicao_da_lista() {
+        let value: Value = serde_json::json!({
+            "status": "em andamento",
+            "color": "#ee5e99",
+            "type": "custom"
+        });
+        let status = parse_status(&value);
+        assert_eq!(status.name, "em andamento");
+        assert_eq!(status.color.as_deref(), Some("#ee5e99"));
+        assert_eq!(status.kind.as_deref(), Some("custom"));
     }
 
     #[test]

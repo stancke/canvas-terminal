@@ -25,11 +25,24 @@ export interface ClickUpSettings {
   folderName: string;
   listId: string;
   listName: string;
+  /** Filtro “atribuídas a mim” (ligado por padrão). */
+  filterMine: boolean;
+  /** Nomes de status marcados; `null` = ainda não configurado (aplica o padrão). */
+  filterStatuses: string[] | null;
 }
+
+/** Status marcados por padrão quando a lista usa os nomes do fluxo da Selecty. */
+const DEFAULT_FILTER_STATUS_NAMES = ["aberto", "em andamento", "rejeitado"];
 
 interface Team {
   id: string;
   name: string;
+}
+
+interface ClickUpUser {
+  id: string;
+  username: string;
+  email: string | null;
 }
 
 interface Space {
@@ -90,6 +103,14 @@ export interface TaskDetail {
   attachments: Attachment[];
 }
 
+export interface TaskComment {
+  id: string;
+  text: string;
+  author: string;
+  date: string | null;
+  resolved: boolean;
+}
+
 type View = "setup" | "select" | "tasks";
 
 function emptySettings(): ClickUpSettings {
@@ -103,6 +124,8 @@ function emptySettings(): ClickUpSettings {
     folderName: "",
     listId: "",
     listName: "",
+    filterMine: true,
+    filterStatuses: null,
   };
 }
 
@@ -114,9 +137,28 @@ function loadSettings(): ClickUpSettings {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return settings;
     const record = parsed as Record<string, unknown>;
-    for (const key of Object.keys(settings) as Array<keyof ClickUpSettings>) {
+    const stringKeys = [
+      "token",
+      "teamId",
+      "teamName",
+      "spaceId",
+      "spaceName",
+      "folderId",
+      "folderName",
+      "listId",
+      "listName",
+    ] as const;
+    for (const key of stringKeys) {
       const value = record[key];
       if (typeof value === "string") settings[key] = value;
+    }
+    if (typeof record.filterMine === "boolean") {
+      settings.filterMine = record.filterMine;
+    }
+    if (Array.isArray(record.filterStatuses)) {
+      settings.filterStatuses = record.filterStatuses.filter(
+        (name): name is string => typeof name === "string",
+      );
     }
   } catch {
     // localStorage indisponível: começa sem token.
@@ -133,6 +175,14 @@ function saveSettings(settings: ClickUpSettings): void {
 }
 
 /* ---- Formatação ---- */
+
+function normalizeStatusName(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
 
 function withAlpha(hex: string, alpha: number): string {
   const match = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
@@ -154,9 +204,49 @@ function formatDate(value: string | null): string {
   });
 }
 
-/** `DEV-142` quando existir, senão o final do id numérico. */
+function formatDateTime(value: string | null): string {
+  if (!value) return "";
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "";
+  return new Date(timestamp).toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** `DEV-142` quando existir, senão o id completo da tarefa. */
 function taskLabel(task: TaskSummary | TaskDetail): string {
-  return task.customId ? task.customId : `…${task.id.slice(-6)}`;
+  return task.customId ?? task.id;
+}
+
+/** Copia texto para a área de transferência (WebView sem permissão usa o fallback). */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* Segue para o fallback abaixo. */
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.top = "-1000px";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const copied = document.execCommand("copy");
+    area.remove();
+    return copied;
+  } catch {
+    return false;
+  }
 }
 
 /** Imagens embutidas na descrição em markdown: `![alt](url)`. */
@@ -184,16 +274,25 @@ async function openExternal(url: string | null): Promise<void> {
 
 const api = {
   teams: (token: string) => invoke<Team[]>("clickup_teams", { token }),
+  user: (token: string) => invoke<ClickUpUser>("clickup_user", { token }),
   spaces: (token: string, teamId: string) =>
     invoke<Space[]>("clickup_spaces", { token, teamId }),
   folders: (token: string, spaceId: string) =>
     invoke<Folder[]>("clickup_folders", { token, spaceId }),
   lists: (token: string, spaceId: string, folderId: string) =>
     invoke<ListRef[]>("clickup_lists", { token, spaceId, folderId: folderId || null }),
-  tasks: (token: string, listId: string) =>
-    invoke<TaskSummary[]>("clickup_tasks", { token, listId }),
+  listStatuses: (token: string, listId: string) =>
+    invoke<Status[]>("clickup_list_statuses", { token, listId }),
+  tasks: (
+    token: string,
+    listId: string,
+    assignees: string[],
+    statuses: string[],
+  ) => invoke<TaskSummary[]>("clickup_tasks", { token, listId, assignees, statuses }),
   task: (token: string, taskId: string) =>
     invoke<TaskDetail>("clickup_task", { token, taskId }),
+  comments: (token: string, taskId: string) =>
+    invoke<TaskComment[]>("clickup_comments", { token, taskId }),
 };
 
 /* ---- Painel ---- */
@@ -209,6 +308,8 @@ export class ClickUpPlugin {
   private readonly modalTitle: HTMLElement;
   private readonly modalBody: HTMLElement;
 
+  private modalTaskId = "";
+
   private settings: ClickUpSettings = emptySettings();
   private enabled = false;
   private view: View = "tasks";
@@ -216,12 +317,16 @@ export class ClickUpPlugin {
   private tasks: TaskSummary[] = [];
   private tasksAt = 0;
   private tasksLoading = false;
+  private tasksReloadQueued = false;
   private tasksError: string | null = null;
 
   private teams: Team[] = [];
   private spaces: Space[] = [];
   private folders: Folder[] = [];
   private lists: ListRef[] = [];
+  private listStatuses: Status[] = [];
+  private statusesListId = "";
+  private currentUserId = "";
   private spacesTeamId = "";
   private listsKey = "";
   private formBusy = false;
@@ -392,6 +497,9 @@ export class ClickUpPlugin {
           teamId: teams[0].id,
           teamName: teams[0].name,
         };
+        this.currentUserId = "";
+        this.listStatuses = [];
+        this.statusesListId = "";
         saveSettings(this.settings);
         this.formBusy = false;
         this.view = "select";
@@ -493,7 +601,6 @@ export class ClickUpPlugin {
       this.settings.folderId,
       "— sem pasta —",
     );
-    const listSelect = this.selectField("Lista", this.lists, this.settings.listId, "— escolha —");
 
     teamSelect.select.addEventListener("change", () => {
       this.settings.teamId = teamSelect.select.value;
@@ -536,17 +643,71 @@ export class ClickUpPlugin {
     saveButton.type = "button";
     saveButton.className = "clickup-primary";
     saveButton.textContent = "Usar esta lista";
-    saveButton.disabled = !listSelect.select.value;
 
-    listSelect.select.addEventListener("change", () => {
-      saveButton.disabled = !listSelect.select.value;
+    // A lista de sprints é longa; um <select> comum abre para baixo e fica
+    // cortado pela borda da tela. A caixa abaixo rola e pode ser filtrada.
+    const listWrapper = document.createElement("div");
+    listWrapper.className = "clickup-field";
+
+    const listCaption = document.createElement("span");
+    listCaption.className = "clickup-field-label";
+    listCaption.textContent = "Lista";
+
+    const listSearch = document.createElement("input");
+    listSearch.type = "search";
+    listSearch.className = "clickup-input clickup-list-search";
+    listSearch.placeholder = "Filtrar sprints…";
+    listSearch.autocomplete = "off";
+    listSearch.spellcheck = false;
+    listSearch.disabled = this.lists.length === 0;
+
+    const listSelect = document.createElement("select");
+    listSelect.className = "clickup-select clickup-list-select";
+    listSelect.size = 8;
+    listSelect.disabled = this.lists.length === 0;
+
+    let chosenListId = this.settings.listId;
+
+    const fillListOptions = () => {
+      const query = listSearch.value.trim().toLocaleLowerCase("pt-BR");
+      const keep = chosenListId;
+      listSelect.innerHTML = "";
+      listSelect.appendChild(new Option("— escolha —", ""));
+
+      // A lista escolhida fica no topo para continuar visível.
+      const ordered = [...this.lists].sort((a, b) => {
+        if (a.id === keep) return -1;
+        if (b.id === keep) return 1;
+        return 0;
+      });
+      for (const item of ordered) {
+        if (query && !item.name.toLocaleLowerCase("pt-BR").includes(query)) continue;
+        listSelect.appendChild(new Option(item.name, item.id));
+      }
+      if (keep && Array.from(listSelect.options).some((option) => option.value === keep)) {
+        listSelect.value = keep;
+      }
+      saveButton.disabled = !listSelect.value;
+    };
+
+    listSearch.addEventListener("input", fillListOptions);
+    listSelect.addEventListener("change", () => {
+      chosenListId = listSelect.value;
+      fillListOptions();
     });
 
+    const listHint = document.createElement("p");
+    listHint.className = "clickup-hint";
+    listHint.textContent = "Role a lista ou digite para filtrar os sprints.";
+
+    listWrapper.append(listCaption, listSearch, listSelect, listHint);
+    fillListOptions();
+
     saveButton.addEventListener("click", () => {
-      const listId = listSelect.select.value;
+      const listId = listSelect.value;
       if (!listId) return;
       this.settings.listId = listId;
-      this.settings.listName = listSelect.select.selectedOptions[0]?.textContent ?? "";
+      this.settings.listName = listSelect.selectedOptions[0]?.textContent ?? "";
       this.settings.folderId = folderSelect.select.value;
       this.settings.folderName = this.settings.folderId
         ? (folderSelect.select.selectedOptions[0]?.textContent ?? "")
@@ -554,6 +715,8 @@ export class ClickUpPlugin {
       saveSettings(this.settings);
       this.tasks = [];
       this.tasksAt = 0;
+      this.listStatuses = [];
+      this.statusesListId = "";
       this.formError = null;
       this.view = "tasks";
       this.render();
@@ -572,12 +735,15 @@ export class ClickUpPlugin {
       this.spaces = [];
       this.folders = [];
       this.lists = [];
+      this.listStatuses = [];
+      this.statusesListId = "";
+      this.currentUserId = "";
       this.view = "setup";
       this.formError = null;
       this.render();
     });
 
-    form.append(teamSelect.wrapper, spaceSelect.wrapper, folderSelect.wrapper, listSelect.wrapper);
+    form.append(teamSelect.wrapper, spaceSelect.wrapper, folderSelect.wrapper, listWrapper);
     form.append(saveButton, tokenButton);
 
     if (this.formBusy) {
@@ -625,6 +791,163 @@ export class ClickUpPlugin {
 
   /* ---- Tarefas ---- */
 
+  /** Carrega os status da lista para montar os filtros. */
+  private async ensureListStatuses(): Promise<void> {
+    const { token, listId } = this.settings;
+    if (!token || !listId) return;
+    if (this.statusesListId === listId) return;
+
+    try {
+      const statuses = await api.listStatuses(token, listId);
+      this.listStatuses = statuses;
+      this.statusesListId = listId;
+    } catch {
+      // Sem a lista de status, o filtro por status fica indisponível; tenta
+      // novamente na próxima atualização.
+      this.listStatuses = [];
+      this.statusesListId = "";
+    }
+  }
+
+  /** Usuário dono do token, necessário para “atribuídas a mim”. */
+  private async ensureCurrentUser(): Promise<void> {
+    if (!this.settings.filterMine || this.currentUserId) return;
+    const user = await api.user(this.settings.token);
+    if (!user.id) throw new Error("Não foi possível identificar o usuário do ClickUp.");
+    this.currentUserId = user.id;
+  }
+
+  /**
+   * Resolve os status marcados. Na primeira vez, aplica o padrão
+   * Aberto/Em Andamento/Rejeitado; se a lista usar outros nomes, marca todos.
+   */
+  private ensureStatusSelection(): string[] {
+    const statuses = this.listStatuses;
+    if (statuses.length === 0) return [];
+
+    const defaults = statuses.filter((status) =>
+      DEFAULT_FILTER_STATUS_NAMES.includes(normalizeStatusName(status.name)),
+    );
+
+    if (this.settings.filterStatuses === null) {
+      this.settings.filterStatuses = (defaults.length > 0 ? defaults : statuses).map(
+        (status) => status.name,
+      );
+      saveSettings(this.settings);
+      return this.settings.filterStatuses;
+    }
+
+    const selected = this.settings.filterStatuses;
+    const actual: string[] = [];
+    for (const name of selected) {
+      const normalized = normalizeStatusName(name);
+      const match = statuses.find(
+        (status) => normalizeStatusName(status.name) === normalized,
+      );
+      if (match) actual.push(match.name);
+    }
+
+    if (selected.length > 0 && actual.length === 0) {
+      this.settings.filterStatuses = (defaults.length > 0 ? defaults : statuses).map(
+        (status) => status.name,
+      );
+      saveSettings(this.settings);
+      return this.settings.filterStatuses;
+    }
+
+    if (actual.join("\u0000") !== selected.join("\u0000")) {
+      this.settings.filterStatuses = actual;
+      saveSettings(this.settings);
+    }
+    return actual;
+  }
+
+  private buildFilters(): HTMLElement {
+    // Garante que o padrão seja aplicado antes de montar as caixas.
+    if (this.listStatuses.length > 0) this.ensureStatusSelection();
+
+    const wrap = document.createElement("div");
+    wrap.className = "clickup-filters";
+
+    const mine = document.createElement("label");
+    mine.className = "clickup-filter-mine";
+    mine.title = "Mostrar somente tarefas atribuídas a você";
+
+    const mineInput = document.createElement("input");
+    mineInput.type = "checkbox";
+    mineInput.checked = this.settings.filterMine;
+    mineInput.addEventListener("change", () => {
+      this.settings.filterMine = mineInput.checked;
+      saveSettings(this.settings);
+      void this.loadTasks(true);
+    });
+
+    const mineLabel = document.createElement("span");
+    mineLabel.textContent = "Atribuídas a mim";
+    mine.append(mineInput, mineLabel);
+    wrap.appendChild(mine);
+
+    if (this.listStatuses.length > 0) {
+      const label = document.createElement("span");
+      label.className = "clickup-filter-label";
+      label.textContent = "Status";
+      wrap.appendChild(label);
+
+      const statusWrap = document.createElement("div");
+      statusWrap.className = "clickup-filter-statuses";
+      const selected = new Set(
+        (this.settings.filterStatuses ?? []).map(normalizeStatusName),
+      );
+
+      for (const status of this.listStatuses) {
+        const item = document.createElement("label");
+        item.className = "clickup-filter-status";
+        item.title = status.name;
+
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = selected.has(normalizeStatusName(status.name));
+        const syncChecked = () => {
+          item.classList.toggle("checked", input.checked);
+        };
+        syncChecked();
+        input.addEventListener("change", () => {
+          syncChecked();
+          const current = new Set(this.settings.filterStatuses ?? []);
+          const normalized = normalizeStatusName(status.name);
+          for (const name of Array.from(current)) {
+            if (normalizeStatusName(name) === normalized) current.delete(name);
+          }
+          if (input.checked) current.add(status.name);
+          this.settings.filterStatuses = Array.from(current);
+          saveSettings(this.settings);
+          void this.loadTasks(true);
+        });
+
+        const dot = document.createElement("span");
+        dot.className = "clickup-filter-dot";
+        if (status.color) dot.style.background = status.color;
+
+        const text = document.createElement("span");
+        text.className = "clickup-filter-name";
+        text.textContent = status.name;
+
+        item.append(input, dot, text);
+        statusWrap.appendChild(item);
+      }
+      wrap.appendChild(statusWrap);
+
+      if ((this.settings.filterStatuses?.length ?? 0) === 0) {
+        const hint = document.createElement("span");
+        hint.className = "clickup-filter-hint";
+        hint.textContent = "Nenhum status marcado = todos";
+        wrap.appendChild(hint);
+      }
+    }
+
+    return wrap;
+  }
+
   private renderTasks(): void {
     this.subtitle.textContent = this.settings.listName;
     this.body.innerHTML = "";
@@ -635,6 +958,9 @@ export class ClickUpPlugin {
       );
       return;
     }
+
+    this.body.appendChild(this.buildFilters());
+
     if (this.tasksLoading) {
       this.body.appendChild(this.message("Carregando tarefas…", "clickup-hint"));
       return;
@@ -651,7 +977,7 @@ export class ClickUpPlugin {
     }
     if (this.tasks.length === 0) {
       this.body.appendChild(
-        this.message("Nenhuma tarefa encontrada nesta lista.", "clickup-hint"),
+        this.message("Nenhuma tarefa encontrada com estes filtros.", "clickup-hint"),
       );
       return;
     }
@@ -681,7 +1007,12 @@ export class ClickUpPlugin {
 
   private async loadTasks(force = false): Promise<void> {
     const { token, listId } = this.settings;
-    if (!token || !listId || this.tasksLoading) return;
+    if (!token || !listId) return;
+    if (this.tasksLoading) {
+      // Uma troca de filtro durante o carregamento não pode ser perdida.
+      if (force) this.tasksReloadQueued = true;
+      return;
+    }
     if (!force && Date.now() - this.tasksAt < TASKS_TTL_MS) {
       this.renderTasks();
       return;
@@ -692,40 +1023,89 @@ export class ClickUpPlugin {
     if (this.view === "tasks") this.renderTasks();
 
     try {
-      this.tasks = await api.tasks(token, listId);
+      await this.ensureListStatuses();
+      const statuses = this.ensureStatusSelection();
+      await this.ensureCurrentUser();
+      const assignees =
+        this.settings.filterMine && this.currentUserId
+          ? [this.currentUserId]
+          : [];
+      this.tasks = await api.tasks(token, listId, assignees, statuses);
       this.tasksAt = Date.now();
     } catch (failure) {
       this.tasksError = errorMessage(failure);
     } finally {
       this.tasksLoading = false;
       if (this.view === "tasks") this.renderTasks();
+      if (this.tasksReloadQueued) {
+        this.tasksReloadQueued = false;
+        void this.loadTasks(true);
+      }
     }
   }
 
   /* ---- Modal do ticket ---- */
 
   private async openTask(taskId: string): Promise<void> {
+    this.modalTaskId = taskId;
     this.modalTitle.textContent = "Tarefa";
     this.modalBody.innerHTML = "";
     this.modalBody.appendChild(this.message("Carregando tarefa…", "clickup-hint"));
     this.modal.classList.remove("hidden");
 
     try {
-      const detail = await api.task(this.settings.token, taskId);
-      this.renderDetail(detail);
+      const [detailResult, commentsResult] = await Promise.allSettled([
+        api.task(this.settings.token, taskId),
+        api.comments(this.settings.token, taskId),
+      ]);
+      if (this.modalTaskId !== taskId) return;
+      if (detailResult.status === "rejected") throw detailResult.reason;
+
+      const comments =
+        commentsResult.status === "fulfilled" ? commentsResult.value : [];
+      const commentsError =
+        commentsResult.status === "rejected"
+          ? errorMessage(commentsResult.reason)
+          : null;
+      this.renderDetail(detailResult.value, comments, commentsError);
     } catch (failure) {
+      if (this.modalTaskId !== taskId) return;
       this.modalBody.innerHTML = "";
       this.modalBody.appendChild(this.message(errorMessage(failure), "usage-error"));
     }
   }
 
-  private renderDetail(task: TaskDetail): void {
+  private renderDetail(
+    task: TaskDetail,
+    comments: TaskComment[] = [],
+    commentsError: string | null = null,
+  ): void {
     this.modalTitle.textContent = `#${taskLabel(task)}`;
     this.modalBody.innerHTML = "";
 
     const heading = document.createElement("h3");
     heading.className = "clickup-modal-name";
     heading.textContent = task.name;
+
+    const codeRow = document.createElement("div");
+    codeRow.className = "clickup-code-row";
+
+    const codeLabel = document.createElement("span");
+    codeLabel.className = "clickup-code-label";
+    codeLabel.textContent = "Código";
+
+    const codeValue = document.createElement("code");
+    codeValue.className = "clickup-code-value";
+    codeValue.textContent = taskLabel(task);
+    codeValue.title = "Código completo do ticket";
+
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "clickup-copy";
+    copy.textContent = "Copiar código";
+    copy.addEventListener("click", () => void this.copyCode(taskLabel(task), copy));
+
+    codeRow.append(codeLabel, codeValue, copy);
 
     const meta = document.createElement("div");
     meta.className = "clickup-modal-meta";
@@ -735,7 +1115,7 @@ export class ClickUpPlugin {
     if (task.dueDate) meta.appendChild(metaItem(`entrega ${formatDate(task.dueDate)}`));
     for (const tag of task.tags) meta.appendChild(metaItem(`#${tag}`, "clickup-tag"));
 
-    this.modalBody.append(heading, meta);
+    this.modalBody.append(heading, codeRow, meta);
 
     const description = document.createElement("div");
     description.className = "clickup-description";
@@ -792,6 +1172,8 @@ export class ClickUpPlugin {
       this.modalBody.appendChild(fileList);
     }
 
+    this.modalBody.appendChild(this.renderComments(comments, commentsError));
+
     if (task.url) {
       const open = document.createElement("button");
       open.type = "button";
@@ -802,9 +1184,79 @@ export class ClickUpPlugin {
     }
   }
 
+  private renderComments(
+    comments: TaskComment[],
+    commentsError: string | null,
+  ): HTMLElement {
+    const section = document.createElement("section");
+    section.className = "clickup-comments";
+
+    const title = document.createElement("h4");
+    title.className = "clickup-comments-title";
+    title.textContent =
+      comments.length > 0 ? `Comentários (${comments.length})` : "Comentários";
+    section.appendChild(title);
+
+    if (commentsError) {
+      section.appendChild(this.message(commentsError, "usage-error"));
+      return section;
+    }
+    if (comments.length === 0) {
+      section.appendChild(this.message("Nenhum comentário.", "clickup-hint"));
+      return section;
+    }
+
+    const list = document.createElement("div");
+    list.className = "clickup-comment-list";
+    for (const comment of comments) {
+      const item = document.createElement("article");
+      item.className = "clickup-comment";
+
+      const header = document.createElement("div");
+      header.className = "clickup-comment-header";
+
+      const author = document.createElement("span");
+      author.className = "clickup-comment-author";
+      author.textContent = comment.author;
+
+      const date = document.createElement("span");
+      date.className = "clickup-comment-date";
+      date.textContent = formatDateTime(comment.date);
+
+      header.append(author);
+      if (comment.resolved) {
+        const resolved = document.createElement("span");
+        resolved.className = "clickup-comment-resolved";
+        resolved.textContent = "resolvido";
+        header.appendChild(resolved);
+      }
+      header.appendChild(date);
+
+      const body = document.createElement("p");
+      body.className = "clickup-comment-text";
+      body.textContent = comment.text.trim() || "(sem texto)";
+
+      item.append(header, body);
+      list.appendChild(item);
+    }
+    section.appendChild(list);
+    return section;
+  }
+
   private closeModal(): void {
+    this.modalTaskId = "";
     this.modal.classList.add("hidden");
     this.modalBody.innerHTML = "";
+  }
+
+  private async copyCode(code: string, button: HTMLButtonElement): Promise<void> {
+    const copied = await copyText(code);
+    button.textContent = copied ? "Copiado!" : "Falhou ao copiar";
+    button.classList.toggle("copied", copied);
+    window.setTimeout(() => {
+      button.textContent = "Copiar código";
+      button.classList.remove("copied");
+    }, 1400);
   }
 
   private message(text: string, className: string): HTMLElement {

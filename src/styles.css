@@ -1850,6 +1850,19 @@ body.clickup-enabled #clickup-hotzone {
   cursor: pointer;
 }
 
+.clickup-list-search {
+  margin-bottom: 4px;
+}
+
+.clickup-list-select {
+  height: 148px;
+  padding: 3px;
+}
+
+.clickup-list-select option {
+  padding: 2px 4px;
+}
+
 .clickup-primary {
   padding: 6px 10px;
   background: var(--accent);
@@ -1885,6 +1898,91 @@ body.clickup-enabled #clickup-hotzone {
 
 .clickup-link:hover {
   color: var(--accent);
+}
+
+/* Filtros de tarefas */
+
+.clickup-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0 1px 6px;
+  border-bottom: 1px solid var(--window-border);
+}
+
+.clickup-filter-mine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.clickup-filter-mine input,
+.clickup-filter-status input {
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.clickup-filter-label {
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.clickup-filter-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.clickup-filter-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 6px;
+  background: var(--window);
+  border: 1px solid var(--window-border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.clickup-filter-status:hover {
+  border-color: var(--accent-dim);
+}
+
+.clickup-filter-status.checked {
+  color: var(--text);
+  border-color: var(--window-border);
+  background: var(--quick-hover);
+}
+
+.clickup-filter-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.clickup-filter-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clickup-filter-hint {
+  color: var(--text-muted);
+  font-size: 10px;
 }
 
 /* Lista de tarefas */
@@ -1977,6 +2075,55 @@ body.clickup-enabled #clickup-hotzone {
   color: var(--text);
 }
 
+/* Código completo do ticket + botão de copiar */
+
+.clickup-code-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.clickup-code-label {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.clickup-code-value {
+  padding: 2px 7px;
+  background: rgba(127, 127, 127, 0.06);
+  border: 1px solid var(--window-border);
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  user-select: all;
+}
+
+.clickup-copy {
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--window-border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.clickup-copy:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.clickup-copy.copied {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .clickup-modal-meta {
   display: flex;
   flex-wrap: wrap;
@@ -2063,6 +2210,78 @@ body.clickup-enabled #clickup-hotzone {
 
 .clickup-file:hover {
   border-color: var(--accent-dim);
+}
+
+/* Comentários do ticket */
+
+.clickup-comments {
+  margin: 0 0 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--window-border);
+}
+
+.clickup-comments-title {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.clickup-comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.clickup-comment {
+  padding: 7px 9px;
+  background: rgba(127, 127, 127, 0.05);
+  border: 1px solid var(--window-border);
+  border-radius: 7px;
+}
+
+.clickup-comment-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.clickup-comment-author {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.clickup-comment-date {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 9.5px;
+}
+
+.clickup-comment-resolved {
+  padding: 1px 5px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.clickup-comment-text {
+  margin: 0;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .clickup-open {

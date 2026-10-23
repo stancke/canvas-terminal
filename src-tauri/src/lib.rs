@@ -6,7 +6,8 @@ pub mod shells;
 pub mod usage;
 
 use clickup::{
-    clickup_folders, clickup_lists, clickup_spaces, clickup_task, clickup_tasks, clickup_teams,
+    clickup_comments, clickup_folders, clickup_list_statuses, clickup_lists, clickup_spaces,
+    clickup_task, clickup_tasks, clickup_teams, clickup_user,
 };
 use pty::{
     PtyState, pty_alive, pty_default_cwd, pty_kill, pty_kill_all, pty_list_shells, pty_resize,
@@ -34,11 +35,14 @@ pub fn run() {
             pty_default_cwd,
             usage_report,
             clickup_teams,
+            clickup_user,
             clickup_spaces,
             clickup_folders,
             clickup_lists,
+            clickup_list_statuses,
             clickup_tasks,
             clickup_task,
+            clickup_comments,
         ])
         .build(generate_context!())
         .expect("falha ao construir aplicação Tauri")
