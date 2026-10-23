@@ -120,6 +120,16 @@
           </div>
         </div>
 
+        <div class="menu" id="menu-plugins">
+          <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false">
+            Plugins
+          </button>
+          <div class="menu-dropdown plugin-dropdown" role="menu" aria-label="Plugins">
+            <p class="plugin-hint">Ative os plugins que quiser usar.</p>
+            <div id="plugin-list"></div>
+          </div>
+        </div>
+
         <div class="menu">
           <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false">
             Ajuda
@@ -200,7 +210,24 @@
       <div id="context-menu" class="hidden"></div>
     </main>
 
-    <div id="quick-hotzone" title="Mostrar comandos rápidos"></div>
+    <div
+      id="quick-hotzone"
+      role="button"
+      tabindex="0"
+      aria-label="Comandos rápidos"
+      aria-controls="quick-panel"
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path
+          d="M4 4.5 7.5 8 4 11.5M9 11.5h4"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+    </div>
 
     <aside id="quick-panel" aria-label="Comandos rápidos">
       <div class="quick-header">
@@ -234,6 +261,35 @@
       <p id="quick-empty" class="quick-empty">
         Clique em <strong>+</strong> para salvar seu primeiro comando.
       </p>
+    </aside>
+
+    <div
+      id="plugin-hotzone"
+      role="button"
+      tabindex="0"
+      aria-label="Uso de tokens"
+      aria-controls="plugin-widget"
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path
+          d="M3 13V9M8 13V4M13 13V7"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+        />
+      </svg>
+    </div>
+
+    <aside id="plugin-widget" aria-label="Uso de tokens">
+      <div class="plugin-header">
+        <span class="plugin-title">Uso de tokens</span>
+        <span id="plugin-updated" class="plugin-updated"></span>
+        <button id="plugin-refresh" class="plugin-icon" type="button" title="Atualizar agora">
+          ⟳
+        </button>
+      </div>
+      <div id="plugin-body" class="plugin-body"></div>
     </aside>
 
     <footer id="statusbar">

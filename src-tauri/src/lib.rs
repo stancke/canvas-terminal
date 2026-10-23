@@ -2,6 +2,7 @@
 
 pub mod pty;
 pub mod shells;
+pub mod usage;
 
 use pty::{
     PtyState, pty_alive, pty_default_cwd, pty_kill, pty_kill_all, pty_list_shells, pty_resize,
@@ -9,6 +10,7 @@ use pty::{
 };
 use std::sync::Arc;
 use tauri::{generate_context, generate_handler, Builder, RunEvent};
+use usage::usage_report;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -26,6 +28,7 @@ pub fn run() {
             pty_alive,
             pty_kill_all,
             pty_default_cwd,
+            usage_report,
         ])
         .build(generate_context!())
         .expect("falha ao construir aplicação Tauri")

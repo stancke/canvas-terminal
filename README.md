@@ -176,11 +176,11 @@ executam o comando quando a área é restaurada.
 ## Comandos rápidos
 
 O painel translúcido no canto inferior esquerdo guarda seus comandos favoritos.
-Ele fica **oculto** e aparece quando o mouse encosta no canto inferior esquerdo
-da tela. Clique em **+**, dê um nome (opcional) e informe o comando. Marque
-**Executar depois de colar** se quiser que o `Enter` seja enviado
-automaticamente; sem a marca, o comando é apenas colado no terminal em foco para
-você confirmar.
+Ele fica **oculto** atrás de uma alça discreta na borda esquerda (ícone `>_`) e
+aparece quando o mouse encosta nela. Clique em **+**, dê um nome (opcional) e
+informe o comando. Marque **Executar depois de colar** se quiser que o `Enter`
+seja enviado automaticamente; sem a marca, o comando é apenas colado no terminal
+em foco para você confirmar.
 
 - O painel pode ser recolhido pelo botão `▾` (o estado é lembrado).
 - Comandos marcados para executar exibem um `↵` na lista.
@@ -189,6 +189,34 @@ você confirmar.
 - Para remover um comando, clique em `×`.
 - Os comandos ficam salvos em `localStorage["canvas-terminal.quick-commands.v1"]`.
 - Em tela cheia o painel continua disponível no mesmo canto.
+
+---
+
+## Plugins
+
+O menu **Plugins** no cabeçalho lista os plugins disponíveis, cada um com um
+interruptor. O estado fica em `localStorage["canvas-terminal.plugins.v1"]` e é
+lembrado entre execuções.
+
+### Uso de tokens
+
+Primeiro plugin do app. Quando ativado, mostra no canto inferior direito um
+painel com o consumo de tokens dos agentes instalados na máquina:
+
+- **Claude Code** — lê os transcripts em `~/.claude/projects/**/*.jsonl`
+  (`message.usage` de cada resposta do assistente).
+- **OpenCode** — lê o banco `~/.local/share/opencode/opencode.db`
+  (tabelas `session_message`/`message`) e, em versões antigas, os JSON em
+  `~/.local/share/opencode/storage/message/**`.
+- Dois recortes por agente: **janela de 5 h** (a sessão do Claude Code) e
+  **semana** (7 dias), com a previsão de quando cada janela se libera.
+- A barra fina mostra a composição: entrada, saída e cache.
+- O painel fica escondido atrás de uma alça discreta na borda direita; aparece
+  quando o mouse encosta nela e recolhe ao sair — igual aos comandos rápidos.
+- Atualiza a cada 20 s, ao abrir o painel e ao voltar para a janela.
+
+Nada é enviado para fora da máquina: a leitura é somente dos arquivos locais
+dos próprios agentes. O botão `⟳` força uma atualização imediata.
 
 ---
 

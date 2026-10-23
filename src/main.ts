@@ -31,6 +31,15 @@ import {
   saveQuickCommands,
   type QuickCommand,
 } from "./snippets";
+import {
+  PLUGINS,
+  isPluginEnabled,
+  loadPluginSettings,
+  savePluginSettings,
+  type PluginDefinition,
+  type PluginSettings,
+} from "./plugins";
+import { TokenUsageWidget } from "./token-usage";
 import { initTheme, onThemeChange, themeLabel, toggleTheme } from "./theme";
 
 const DEFAULT_W = 720;
@@ -57,6 +66,8 @@ let shells: ShellInfo[] = [];
 let focusedTerminal: TerminalWindow | null = null;
 let zCounter = 10;
 let quickCommands: QuickCommand[] = [];
+let pluginSettings: PluginSettings = { enabled: {} };
+let tokenUsageWidget: TokenUsageWidget | null = null;
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 let toolbarForcedOpen = false;
@@ -116,6 +127,7 @@ async function main(): Promise<void> {
   bindToolbar();
   bindWorkspaceTabs();
   bindQuickPanel();
+  bindPlugins();
   bindGlobalShortcuts();
   bindAutoHideToolbar();
   bindFullscreenWatcher();
@@ -759,6 +771,80 @@ function flashHint(message: string): void {
     hintTimer = null;
     hint.textContent = hint.dataset.original || original;
   }, 3000);
+}
+
+/* ---- Plugins ---- */
+
+function bindPlugins(): void {
+  pluginSettings = loadPluginSettings();
+  tokenUsageWidget = new TokenUsageWidget();
+  renderPluginMenu();
+  applyPluginStates();
+}
+
+/** Monta o menu "Plugins" a partir do registro (um interruptor por plugin). */
+function renderPluginMenu(): void {
+  const list = document.getElementById("plugin-list");
+  if (!list) return;
+  list.innerHTML = "";
+
+  for (const plugin of PLUGINS) {
+    const row = document.createElement("div");
+    row.className = "plugin-item";
+    row.dataset.id = plugin.id;
+    row.setAttribute("role", "menuitemcheckbox");
+    row.tabIndex = 0;
+
+    const info = document.createElement("div");
+    info.className = "plugin-info";
+
+    const name = document.createElement("span");
+    name.className = "plugin-name";
+    name.textContent = plugin.name;
+
+    const description = document.createElement("span");
+    description.className = "plugin-desc";
+    description.textContent = plugin.description;
+
+    info.append(name, description);
+
+    const toggle = document.createElement("span");
+    toggle.className = "plugin-switch";
+    toggle.setAttribute("aria-hidden", "true");
+
+    row.append(info, toggle);
+    row.addEventListener("click", () => activatePlugin(plugin, !isPluginEnabled(pluginSettings, plugin.id)));
+    row.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      activatePlugin(plugin, !isPluginEnabled(pluginSettings, plugin.id));
+    });
+
+    list.appendChild(row);
+  }
+
+  syncPluginMenu();
+}
+
+function syncPluginMenu(): void {
+  for (const row of document.querySelectorAll<HTMLElement>("#plugin-list .plugin-item")) {
+    const id = row.dataset.id ?? "";
+    const enabled = isPluginEnabled(pluginSettings, id);
+    row.setAttribute("aria-checked", String(enabled));
+  }
+}
+
+/** Liga/desliga um plugin, persiste e aplica o efeito (o menu fica aberto). */
+function activatePlugin(plugin: PluginDefinition, enabled: boolean): void {
+  pluginSettings.enabled[plugin.id] = enabled;
+  savePluginSettings(pluginSettings);
+  syncPluginMenu();
+  applyPluginStates();
+  flashHint(`Plugin "${plugin.name}" ${enabled ? "ativado" : "desativado"}.`);
+}
+
+function applyPluginStates(): void {
+  tokenUsageWidget?.setEnabled(isPluginEnabled(pluginSettings, "token-usage"));
 }
 
 /* ---- Áreas de trabalho (abas) ---- */
