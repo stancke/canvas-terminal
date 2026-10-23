@@ -218,6 +218,25 @@ painel com o consumo de tokens dos agentes instalados na máquina:
 Nada é enviado para fora da máquina: a leitura é somente dos arquivos locais
 dos próprios agentes. O botão `⟳` força uma atualização imediata.
 
+### ClickUp
+
+Lista as tarefas de uma lista do ClickUp e abre o ticket em uma modal.
+
+1. Ative o plugin em **Plugins → ClickUp**. O painel abre pedindo o **token
+   pessoal da API** (ClickUp → Configurações → Apps → API Token).
+2. Escolha **workspace → espaço → pasta (opcional) → lista** e clique em
+   **Usar esta lista**. A engrenagem `⚙` reabre essa seleção a qualquer momento.
+3. A lista mostra **ID**, **nome** e **status** de cada tarefa. Clicar abre a
+   modal com nome, status, responsáveis, tags, descrição e imagens anexadas
+   (clique na imagem para abrir no navegador). O botão **Abrir no ClickUp** leva
+   ao ticket original.
+4. O botão `⟳` atualiza a lista (as tarefas ficam em cache por 30 s).
+
+O token é guardado no `localStorage` do app (`canvas-terminal.clickup.v1`) e só
+é enviado para `api.clickup.com`. O backend (`src-tauri/src/clickup.rs`) usa
+`reqwest` com TLS embutido e expõe apenas os endpoints de leitura
+(`team`, `space`, `folder`, `list`, `task`).
+
 ---
 
 ## Atalhos

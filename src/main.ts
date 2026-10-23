@@ -40,6 +40,7 @@ import {
   type PluginSettings,
 } from "./plugins";
 import { TokenUsageWidget } from "./token-usage";
+import { ClickUpPlugin } from "./clickup";
 import { initTheme, onThemeChange, themeLabel, toggleTheme } from "./theme";
 
 const DEFAULT_W = 720;
@@ -68,6 +69,7 @@ let zCounter = 10;
 let quickCommands: QuickCommand[] = [];
 let pluginSettings: PluginSettings = { enabled: {} };
 let tokenUsageWidget: TokenUsageWidget | null = null;
+let clickUpPlugin: ClickUpPlugin | null = null;
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 let toolbarForcedOpen = false;
@@ -762,6 +764,7 @@ function flashHint(message: string): void {
 function bindPlugins(): void {
   pluginSettings = loadPluginSettings();
   tokenUsageWidget = new TokenUsageWidget();
+  clickUpPlugin = new ClickUpPlugin();
   renderPluginMenu();
   applyPluginStates();
 }
@@ -829,6 +832,7 @@ function activatePlugin(plugin: PluginDefinition, enabled: boolean): void {
 
 function applyPluginStates(): void {
   tokenUsageWidget?.setEnabled(isPluginEnabled(pluginSettings, "token-usage"));
+  clickUpPlugin?.setEnabled(isPluginEnabled(pluginSettings, "clickup"));
 }
 
 /* ---- Áreas de trabalho (abas) ---- */

@@ -281,6 +281,25 @@
       </svg>
     </div>
 
+    <div
+      id="clickup-hotzone"
+      role="button"
+      tabindex="0"
+      aria-label="ClickUp"
+      aria-controls="clickup-widget"
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path
+          d="M3 4.5 5 6.6 8 3l3 3.6 2-2.1M3 11.5 5 9.4 8 13l3-3.6 2 2.1"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+    </div>
+
     <aside id="plugin-widget" aria-label="Uso de tokens">
       <div class="plugin-header">
         <span class="plugin-title">Uso de tokens</span>
@@ -291,6 +310,36 @@
       </div>
       <div id="plugin-body" class="plugin-body"></div>
     </aside>
+
+    <aside id="clickup-widget" aria-label="ClickUp">
+      <div class="plugin-header">
+        <span class="plugin-title">ClickUp</span>
+        <span id="clickup-subtitle" class="plugin-updated"></span>
+        <button id="clickup-config" class="plugin-icon" type="button" title="Configurar lista">
+          ⚙
+        </button>
+        <button id="clickup-refresh" class="plugin-icon" type="button" title="Atualizar tarefas">
+          ⟳
+        </button>
+      </div>
+      <div id="clickup-body" class="plugin-body clickup-body"></div>
+    </aside>
+
+    <div
+      id="clickup-modal"
+      class="clickup-modal hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="clickup-modal-title"
+    >
+      <div class="dialog-card clickup-modal-card">
+        <div class="dialog-header">
+          <span id="clickup-modal-title"></span>
+          <button id="clickup-modal-close" type="button" title="Fechar (Esc)">×</button>
+        </div>
+        <div id="clickup-modal-body" class="dialog-body clickup-modal-body"></div>
+      </div>
+    </div>
 
     <footer id="statusbar">
       <span id="coords">0, 0</span>

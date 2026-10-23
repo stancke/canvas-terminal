@@ -158,8 +158,16 @@ export class TokenUsageWidget {
   private bindToggle(): void {
     const toggle = () => {
       if (!this.enabled) return;
-      const visible = this.panel.classList.toggle("visible");
-      if (visible && Date.now() - this.lastFetchAt > STALE_MS) void this.refresh(true);
+      const open = !this.panel.classList.contains("visible");
+      if (open) {
+        document.dispatchEvent(
+          new CustomEvent("plugin-panel-opened", { detail: "token-usage" }),
+        );
+        this.panel.classList.add("visible");
+        if (Date.now() - this.lastFetchAt > STALE_MS) void this.refresh(true);
+      } else {
+        this.panel.classList.remove("visible");
+      }
     };
 
     this.hotzone.addEventListener("click", toggle);
@@ -168,6 +176,12 @@ export class TokenUsageWidget {
       event.preventDefault();
       toggle();
     });
+    // Outro plugin abriu o painel dele? Recolhe este.
+    document.addEventListener("plugin-panel-opened", ((event: Event) => {
+      if ((event as CustomEvent<string>).detail !== "token-usage") {
+        this.panel.classList.remove("visible");
+      }
+    }) as EventListener);
   }
 
   async refresh(force = false): Promise<void> {

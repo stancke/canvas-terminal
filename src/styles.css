@@ -1713,3 +1713,361 @@ body.fullscreen-mode #plugin-widget {
   bottom: 14px;
 }
 
+body.fullscreen-mode #clickup-widget {
+  bottom: 14px;
+}
+
+/* ---- Plugin ClickUp ---- */
+
+#clickup-hotzone {
+  position: fixed;
+  right: 0;
+  bottom: 156px;
+  z-index: 1001;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 60px;
+  color: var(--text-muted);
+  background: var(--quick-bg);
+  border: 1px solid var(--quick-border);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  cursor: pointer;
+  opacity: 0.55;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+body.clickup-enabled #clickup-hotzone {
+  display: flex;
+}
+
+#clickup-hotzone:hover,
+#clickup-hotzone:focus-visible {
+  opacity: 1;
+  color: var(--text);
+  background: var(--window);
+  outline: none;
+}
+
+#clickup-hotzone svg {
+  width: 13px;
+  height: 13px;
+}
+
+#clickup-widget {
+  position: fixed;
+  right: 26px;
+  bottom: 34px;
+  z-index: 900;
+  width: 340px;
+  max-width: calc(100vw - 28px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--quick-bg);
+  border: 1px solid var(--quick-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  font-family: var(--font-ui);
+  transform: translateX(calc(100% + 24px));
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 170ms ease, opacity 170ms ease, bottom 170ms ease;
+}
+
+#clickup-widget.visible {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.plugin-icon.hidden {
+  display: none;
+}
+
+.clickup-body {
+  gap: 6px;
+  max-height: 62vh;
+}
+
+.clickup-form {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 2px;
+}
+
+.clickup-hint {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.clickup-form-error {
+  margin: 0;
+}
+
+.clickup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.clickup-field-label {
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.clickup-input,
+.clickup-select {
+  width: 100%;
+  padding: 5px 7px;
+  background: var(--window);
+  border: 1px solid var(--window-border);
+  border-radius: 5px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  outline: none;
+}
+
+.clickup-input:focus,
+.clickup-select:focus {
+  border-color: var(--accent-dim);
+}
+
+.clickup-select {
+  cursor: pointer;
+}
+
+.clickup-primary {
+  padding: 6px 10px;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  color: var(--accent-contrast);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.clickup-primary:hover {
+  background: var(--accent-hover);
+}
+
+.clickup-primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.clickup-link {
+  align-self: flex-start;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.clickup-link:hover {
+  color: var(--accent);
+}
+
+/* Lista de tarefas */
+
+.clickup-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.clickup-task {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 7px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.clickup-task:hover {
+  background: var(--quick-hover);
+}
+
+.clickup-task-id {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-muted);
+}
+
+.clickup-task-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clickup-status {
+  flex: 0 0 auto;
+  max-width: 96px;
+  padding: 1px 6px;
+  border: 1px solid rgba(139, 148, 158, 0.45);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Modal do ticket */
+
+.clickup-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.clickup-modal.hidden {
+  display: none;
+}
+
+.clickup-modal-card {
+  width: min(720px, calc(100vw - 48px));
+  max-height: calc(100vh - 80px);
+}
+
+.clickup-modal-body {
+  padding: 16px 18px;
+  user-select: text;
+}
+
+.clickup-modal-name {
+  margin: 0 0 8px;
+  font-size: 15px;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.clickup-modal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.clickup-meta-item {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.clickup-tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--quick-hover);
+  font-family: var(--font-mono);
+}
+
+.clickup-description {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  background: rgba(127, 127, 127, 0.06);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text);
+  max-height: 32vh;
+  overflow: auto;
+}
+
+.clickup-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.clickup-image {
+  padding: 0;
+  background: var(--bg);
+  border: 1px solid var(--window-border);
+  border-radius: 7px;
+  overflow: hidden;
+  cursor: zoom-in;
+  aspect-ratio: 4 / 3;
+}
+
+.clickup-image:hover {
+  border-color: var(--accent-dim);
+}
+
+.clickup-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.clickup-image.broken {
+  display: none;
+}
+
+.clickup-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.clickup-file {
+  padding: 4px 8px;
+  background: var(--window);
+  border: 1px solid var(--window-border);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.clickup-file:hover {
+  border-color: var(--accent-dim);
+}
+
+.clickup-open {
+  display: inline-block;
+  margin-top: 4px;
+}
+
+

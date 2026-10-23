@@ -19,6 +19,11 @@ export const PLUGINS: PluginDefinition[] = [
     name: "Uso de tokens",
     description: "Consumo de Claude Code e OpenCode por janela de 5 h e semanal.",
   },
+  {
+    id: "clickup",
+    name: "ClickUp",
+    description: "Tarefas da lista escolhida, com status e detalhes do ticket.",
+  },
 ];
 
 const STORAGE_KEY = "canvas-terminal.plugins.v1";
