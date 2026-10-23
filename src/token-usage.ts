@@ -1,8 +1,8 @@
 /**
  * Plugin "Uso de tokens" (widget flutuante no canto inferior direito).
  *
- * O painel fica escondido e entra quando o mouse encosta na alça lateral,
- * saindo ao sair do mouse — mesmo comportamento dos comandos rápidos.
+ * O painel fica escondido atrás da alça lateral e abre/fecha ao clicar nela
+ * — mesmo comportamento dos comandos rápidos.
  *
  * Os dados vêm do comando `usage_report` (backend em `src-tauri/src/usage.rs`),
  * que lê apenas os arquivos locais do Claude Code e do OpenCode.
@@ -40,9 +40,8 @@ export interface UsageReport {
 
 /** Intervalo de atualização enquanto o plugin está ligado. */
 const REFRESH_MS = 20_000;
-/** Evita reler os arquivos a cada passada de mouse. */
+/** Evita reler os arquivos a cada abertura do painel. */
 const STALE_MS = 5_000;
-const HIDE_DELAY_MS = 320;
 
 export async function fetchUsageReport(): Promise<UsageReport> {
   return invoke<UsageReport>("usage_report");
@@ -104,7 +103,6 @@ export class TokenUsageWidget {
   private readonly updated: HTMLElement;
   private refreshButton: HTMLButtonElement | null;
   private timer: number | null = null;
-  private hideTimer: number | null = null;
   private enabled = false;
   private loading = false;
   private lastFetchAt = 0;
@@ -118,7 +116,7 @@ export class TokenUsageWidget {
     this.updated = document.getElementById("plugin-updated")!;
     this.refreshButton = document.getElementById("plugin-refresh") as HTMLButtonElement | null;
 
-    this.bindHover();
+    this.bindToggle();
     this.refreshButton?.addEventListener("click", (event) => {
       event.stopPropagation();
       void this.refresh(true);
@@ -131,9 +129,7 @@ export class TokenUsageWidget {
     document.body.classList.toggle("token-usage-enabled", enabled);
 
     if (enabled) {
-      this.show();
-      // O painel aparece ao ativar; se o mouse não vier, ele se recolhe.
-      this.scheduleHide(4_000);
+      // Já busca os dados; o painel só abre no clique da alça.
       void this.refresh(true);
       this.timer = window.setInterval(() => {
         if (!document.hidden) void this.refresh();
@@ -142,7 +138,7 @@ export class TokenUsageWidget {
       document.addEventListener("visibilitychange", this.onVisibility);
     } else {
       this.stop();
-      this.hide();
+      this.panel.classList.remove("visible");
     }
   }
 
@@ -158,48 +154,20 @@ export class TokenUsageWidget {
     document.removeEventListener("visibilitychange", this.onVisibility);
   }
 
-  private bindHover(): void {
-    const show = () => {
-      this.clearHideTimer();
-      this.show();
-      if (Date.now() - this.lastFetchAt > STALE_MS) void this.refresh(true);
-    };
-    const scheduleHide = () => {
-      this.scheduleHide(HIDE_DELAY_MS);
+  /** A alça abre e fecha o painel — sem hover, igual aos comandos rápidos. */
+  private bindToggle(): void {
+    const toggle = () => {
+      if (!this.enabled) return;
+      const visible = this.panel.classList.toggle("visible");
+      if (visible && Date.now() - this.lastFetchAt > STALE_MS) void this.refresh(true);
     };
 
-    this.hotzone.addEventListener("mouseenter", show);
-    this.hotzone.addEventListener("click", show);
-    this.panel.addEventListener("mouseenter", show);
-    this.panel.addEventListener("mouseleave", scheduleHide);
-    this.panel.addEventListener("focusin", show);
-    this.panel.addEventListener("focusout", scheduleHide);
-  }
-
-  private scheduleHide(delay: number): void {
-    this.clearHideTimer();
-    this.hideTimer = window.setTimeout(() => {
-      this.hideTimer = null;
-      if (this.panel.matches(":hover")) return;
-      if (this.panel.contains(document.activeElement)) return;
-      this.hide();
-    }, delay);
-  }
-
-  private clearHideTimer(): void {
-    if (this.hideTimer !== null) {
-      window.clearTimeout(this.hideTimer);
-      this.hideTimer = null;
-    }
-  }
-
-  private show(): void {
-    if (!this.enabled) return;
-    this.panel.classList.add("visible");
-  }
-
-  private hide(): void {
-    this.panel.classList.remove("visible");
+    this.hotzone.addEventListener("click", toggle);
+    this.hotzone.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      toggle();
+    });
   }
 
   async refresh(force = false): Promise<void> {

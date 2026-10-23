@@ -620,35 +620,19 @@ function bindQuickPanel(): void {
     if (nowCollapsed) closeQuickForm();
   });
 
-  // Auto-hide: o painel só aparece quando o mouse encosta no canto inferior
-  // esquerdo e se esconde ao sair, como o cabeçalho.
+  // O painel abre e fecha somente pelo clique na alça lateral (sem hover).
   const hotzone = document.getElementById("quick-hotzone")!;
-  let hideTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const showPanel = () => {
-    if (hideTimer) {
-      clearTimeout(hideTimer);
-      hideTimer = null;
-    }
-    panel.classList.add("visible");
+  const togglePanel = () => {
+    const visible = panel.classList.toggle("visible");
+    if (!visible) closeQuickForm();
   };
 
-  const scheduleHidePanel = () => {
-    if (hideTimer) clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      hideTimer = null;
-      if (panel.contains(document.activeElement)) return;
-      if (panel.matches(":hover")) return;
-      panel.classList.remove("visible");
-    }, 350);
-  };
-
-  hotzone.addEventListener("mouseenter", showPanel);
-  hotzone.addEventListener("click", showPanel);
-  panel.addEventListener("mouseenter", showPanel);
-  panel.addEventListener("mouseleave", scheduleHidePanel);
-  panel.addEventListener("focusin", showPanel);
-  panel.addEventListener("focusout", scheduleHidePanel);
+  hotzone.addEventListener("click", togglePanel);
+  hotzone.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    togglePanel();
+  });
 
   form.addEventListener("submit", (e) => {
     e.preventDefault();

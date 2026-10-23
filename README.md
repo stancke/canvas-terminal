@@ -177,7 +177,7 @@ executam o comando quando a área é restaurada.
 
 O painel translúcido no canto inferior esquerdo guarda seus comandos favoritos.
 Ele fica **oculto** atrás de uma alça discreta na borda esquerda (ícone `>_`) e
-aparece quando o mouse encosta nela. Clique em **+**, dê um nome (opcional) e
+abre/fecha ao clicar nela (sem hover). Clique em **+**, dê um nome (opcional) e
 informe o comando. Marque **Executar depois de colar** se quiser que o `Enter`
 seja enviado automaticamente; sem a marca, o comando é apenas colado no terminal
 em foco para você confirmar.
@@ -211,8 +211,8 @@ painel com o consumo de tokens dos agentes instalados na máquina:
 - Dois recortes por agente: **janela de 5 h** (a sessão do Claude Code) e
   **semana** (7 dias), com a previsão de quando cada janela se libera.
 - A barra fina mostra a composição: entrada, saída e cache.
-- O painel fica escondido atrás de uma alça discreta na borda direita; aparece
-  quando o mouse encosta nela e recolhe ao sair — igual aos comandos rápidos.
+- O painel fica escondido atrás de uma alça discreta na borda direita e
+  abre/fecha ao clicar nela — igual aos comandos rápidos.
 - Atualiza a cada 20 s, ao abrir o painel e ao voltar para a janela.
 
 Nada é enviado para fora da máquina: a leitura é somente dos arquivos locais
