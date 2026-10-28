@@ -93,19 +93,29 @@ Os pacotes ficarão em `src-tauri/target/release/bundle/` (subpastas `deb/`, `rp
 
 ## Interface
 
-O cabeçalho é uma barra de menus com as categorias **Arquivo**, **Exibir**,
-**Janela** e **Ajuda**. Ele fica escondido para deixar mais espaço ao canvas e
-desce automaticamente quando o mouse encosta no topo da tela (ou quando algum
-item recebe foco pelo teclado).
+A interface é organizada em um **painel lateral esquerdo**, sempre visível:
+
+- O **primeiro item** (grade) abre o **menu do aplicativo**, que reúne as
+  categorias **Arquivo**, **Exibir**, **Janela**, **Plugins** e **Ajuda**, além
+  do seletor de shell, do botão de tela cheia e do zoom/contagem de terminais.
+  O antigo cabeçalho fixo deixou de existir.
+- Abaixo ficam as **áreas de trabalho** (uma bolinha por área, com cor, ícone ou
+  imagem), o botão **+** para criar uma nova área e, no rodapé, o botão do
+  **Git**, que abre as alterações da pasta rastreada.
+- O painel tem 46 px e pode ser **recolhido/expandido** pela alça discreta na
+  borda (uma seta no meio da tela). No modo maximizado ele recolhe sozinho e a
+  alça some, deixando o terminal usar toda a largura.
 
 Use **Exibir → Tela cheia** (`F11`) para esconder a moldura da janela, a barra
-de tarefas do sistema e a barra de status. O cabeçalho também fica oculto, mas
-continua disponível: encoste o mouse no topo da tela para ele descer. Para sair
-da tela cheia use **F11**/`Ctrl+Shift+F`, o botão **⛶** no cabeçalho ou o item
-**Exibir → Sair da tela cheia**; `Esc` não sai do fullscreen.
+de tarefas do sistema e a barra de status. O painel e o menu continuam
+disponíveis. Para sair da tela cheia use **F11**/`Ctrl+Shift+F`, o botão **⛶**
+no menu ou o item **Exibir → Sair da tela cheia**; `Esc` não sai do fullscreen.
 
-O zoom é uniforme: janelas, barra de título, controles e o texto dos terminais
-escalam juntos, sem reflow do conteúdo. Vá de 25% a 300% com `Ctrl + roda do
+O zoom é **por área de trabalho**: cada área guarda o seu próprio nível e ele é
+restaurado ao trocar de área. Janelas, barra de título, controles e o texto dos
+terminais escalam juntos, sem reflow do conteúdo. No **modo maximizado** o
+terminal é sempre exibido em **100%** (e os atalhos de zoom ficam travados); ao
+restaurar, a área volta ao zoom que tinha. Vá de 25% a 300% com `Ctrl + roda do
 mouse`, `Ctrl+=` / `Ctrl+-` ou pelo menu **Exibir**.
 
 Para navegar sem o mouse, clique em uma área vazia do canvas e use **WASD** ou
@@ -115,21 +125,24 @@ ao shell.
 
 ---
 
-## Áreas de trabalho (abas)
+## Áreas de trabalho (painel lateral)
 
-As abas no cabeçalho funcionam como **áreas de trabalho independentes**: cada
-uma tem seus próprios terminais, posição e zoom. As sessões continuam vivas ao
-trocar de aba.
+Cada item do painel lateral é uma **área de trabalho independente**: cada uma
+tem seus próprios terminais e posição no canvas. O zoom é compartilhado por
+todas. As sessões continuam vivas ao trocar de área.
 
 - **+** cria uma nova área com um terminal no centro.
-- Clique em uma aba para trocar de área; clique em **×** para fechar (com
-  confirmação se houver terminais).
-- **Duplo clique** no nome da aba ou **botão direito → Renomear área de
-  trabalho** muda o nome.
+- Clique em um item para trocar de área.
+- **Duplo clique** no item (ou **botão direito → Editar área de trabalho**)
+  abre o editor com **nome, cor, ícone, imagem e pasta**. A imagem e o ícone
+  substituem a inicial da área no painel; a pasta vale para os novos terminais
+  desta área (o painel do Git tem uma pasta própria, escolhida nele).
+- **Botão direito → Fechar área de trabalho** encerra a área (com confirmação
+  se houver terminais).
 - `Ctrl+Shift+T` cria uma área; `Ctrl+Tab` e `Ctrl+Shift+Tab` alternam.
-- O menu **Janela** também traz essas ações.
+- O menu **Janela** traz essas ações, incluindo **Editar área atual...**.
 
-Ao trocar de área pelo cabeçalho, por `Ctrl+Tab` ou por **Q/E** enquanto você
+Ao trocar de área pelo painel, por `Ctrl+Tab` ou por **Q/E** enquanto você
 está no modo normal (sem terminal maximizado), a área escolhida abre **sempre
 no modo normal**: se ela tinha um terminal maximizado salvo, ele é restaurado
 para o tamanho normal. O modo maximizado só é acionado quando você clica em uma
@@ -138,7 +151,8 @@ aba de terminal dentro da faixa maximizada.
 No modo maximizado, **arraste os nomes dos terminais** para reordená-los dentro
 do grupo, ou **arraste o nome da área** para mover o grupo inteiro para a
 esquerda/direita. A ordem fica salva no perfil e afeta apenas a faixa de abas
-maximizada — as janelas do canvas e a ordem das abas do cabeçalho não mudam.
+maximizada — as janelas do canvas e a ordem dos itens do painel lateral não
+mudam.
 
 Quando um terminal está **maximizado**, o cabeçalho dele vira uma barra de abas
 **agrupada por área de trabalho**. Cada grupo mostra os terminais daquela área;
@@ -146,14 +160,14 @@ clique em qualquer nome para trocar de área e maximizar aquele terminal, mesmo
 que ele esteja em outra área (inclusive uma que ainda não tinha sido aberta nesta
 sessão). Fora do modo maximizado, a visão normal do canvas é mantida.
 
-No modo maximizado o cabeçalho do app **não desce mais por hover**. O primeiro
-item antes das abas é o botão **☰**, que abre/fecha o cabeçalho sob demanda;
-enquanto ele está aberto, o terminal é deslocado para baixo para não cobrir as
-abas. `Esc` ou um clique fora também fecham o cabeçalho.
+No modo maximizado, o primeiro item antes das abas é o botão **☰**, que
+abre/fecha o menu do aplicativo por cima do terminal. `Esc` ou um clique fora
+também fecham o menu.
 
 Ao fechar o aplicativo, o perfil completo é salvo automaticamente: áreas,
-nomes, posição, tamanho, estado minimizado/maximizado, zoom, pan, terminal em
-foco e qual área estava ativa. Ao abrir novamente, tudo volta como estava.
+nomes, cores, ícones, imagens, pastas, posição, tamanho, estado
+minimizado/maximizado, zoom, pan, terminal em foco e qual área estava ativa. Ao
+abrir novamente, tudo volta como estava.
 
 ---
 
@@ -192,11 +206,55 @@ em foco para você confirmar.
 
 ---
 
+## Alinhamento em grade
+
+Ao **arrastar** ou **redimensionar** um terminal, o app calcula encaixes com os
+outros terminais visíveis e desenha linhas-guia azuis no canvas:
+
+- bordas esquerdas, direitas, superiores e inferiores;
+- centros horizontais e verticais;
+- larguras/alturas iguais (no redimensionamento);
+- na falta de um vizinho nas proximidades, encaixe discreto na grade de 32 px.
+
+Os encaixes valem para as bordas e para o centro, então dá para alinhar dois
+terminais lado a lado com a mesma altura, empilhar colunas com a mesma largura
+ou centralizar uma janela em relação à outra. As guias somem ao soltar o mouse.
+
+---
+
+## Alterações do Git
+
+O botão de **branch** no rodapé do painel lateral abre a aba de source control
+do app. Na **primeira abertura** ele pede a pasta que deve ser acompanhada:
+escolha navegando pelas pastas (repositórios aparecem com o selo **git**) e
+clique em **Usar esta pasta**. A escolha fica gravada em
+`localStorage["canvas-terminal.git-folder.v1"]` e é usada em todas as aberturas
+seguintes, independentemente da área de trabalho ativa.
+
+- O ícone de pasta no cabeçalho do modal permite **trocar a pasta** a qualquer
+  momento; se a pasta salva sumir ou não for um repositório, o erro oferece
+  **Escolher outra pasta...**.
+- O modal mostra o repositório, a branch atual, o total de arquivos e o saldo
+  de linhas (`+`/`−`).
+- À esquerda ficam os arquivos alterados com o status do `git status`
+  (**M** modificado, **A** adicionado, **D** removido, **R** renomeado, **U**
+  não rastreado).
+- Ao clicar em um arquivo, o diff aparece à direita com números de linha,
+  trechos verdes/vermelhos e os cabeçalhos de hunk.
+- O botão `⟳` recarrega o status (ou a lista de pastas, enquanto o seletor está
+  aberto); `Esc` fecha primeiro o seletor e depois o modal; o **×** ou um clique
+  fora fecham direto.
+- A leitura é somente local, feita pelo backend (`git status`/`git diff`), sem
+  enviar nada para a rede. Arquivos novos recebem um diff sintético; diffs muito
+  grandes são truncados.
+
+---
+
 ## Plugins
 
-O menu **Plugins** no cabeçalho lista os plugins disponíveis, cada um com um
-interruptor. O estado fica em `localStorage["canvas-terminal.plugins.v1"]` e é
-lembrado entre execuções.
+O menu **Plugins** no menu do aplicativo lista os plugins disponíveis, cada um
+com um interruptor. O estado fica em `localStorage["canvas-terminal.plugins.v1"]`
+e é lembrado entre execuções.
 
 ### Uso de tokens
 
@@ -209,8 +267,19 @@ painel com o consumo de tokens dos agentes instalados na máquina:
   (tabelas `session_message`/`message`) e, em versões antigas, os JSON em
   `~/.local/share/opencode/storage/message/**`.
 - Dois recortes por agente: **janela de 5 h** (a sessão do Claude Code) e
-  **semana** (7 dias), com a previsão de quando cada janela se libera.
-- A barra fina mostra a composição: entrada, saída e cache.
+  **semana**, com a previsão de quando cada janela se libera.
+  - No Claude Code a janela de 5 h é um **bloco fixo** que começa na primeira
+    mensagem depois do bloco anterior (mesma lógica do servidor), em vez de um
+    recorte móvel — assim o horário de reset bate com o `/usage`.
+  - A semana usa o **reset oficial da conta** gravado em `~/.claude.json`
+    (`cachedUsageUtilization`), rolado em passos de 7 dias. Sem esse dado, cai
+    no recorte móvel de 7 dias.
+- O número grande conta **tokens novos** (entrada + saída + cache escrito +
+  raciocínio). O **cache lido** aparece no rodapé: ele é a releitura do mesmo
+  contexto e costuma dominar o volume bruto (>95%), mas não acompanha o
+  consumo real da janela.
+- A barra fina mostra a composição do total: entrada, saída, cache escrito e
+  raciocínio.
 - O painel fica escondido atrás de uma alça discreta na borda direita e
   abre/fecha ao clicar nela — igual aos comandos rápidos.
 - Atualiza a cada 20 s, ao abrir o painel e ao voltar para a janela.
@@ -220,17 +289,20 @@ dos próprios agentes. O botão `⟳` força uma atualização imediata.
 
 ### ClickUp
 
-Lista as tarefas de uma lista do ClickUp e abre o ticket em uma modal.
+Lista as tarefas de uma lista do ClickUp em uma **modal grande** (semelhante à
+de alterações do Git), com a alça de acesso no **canto superior direito**.
 
-1. Ative o plugin em **Plugins → ClickUp**. O painel abre pedindo o **token
+1. Ative o plugin em **Plugins → ClickUp**. A modal abre pedindo o **token
    pessoal da API** (ClickUp → Configurações → Apps → API Token).
 2. Escolha **workspace → espaço → pasta (opcional) → lista** e clique em
    **Usar esta lista**. A engrenagem `⚙` reabre essa seleção a qualquer momento.
-3. A lista mostra **ID**, **nome** e **status** de cada tarefa. Clicar abre a
-   modal com nome, status, responsáveis, tags, descrição e imagens anexadas
-   (clique na imagem para abrir no navegador). O botão **Abrir no ClickUp** leva
-   ao ticket original.
-4. O botão `⟳` atualiza a lista (as tarefas ficam em cache por 30 s).
+3. A coluna da esquerda traz os **filtros** (atribuídas a mim, status) e a
+   lista com **ID**, **nome** e **status**. A coluna da direita mostra o
+   detalhe completo do ticket: nome, código com **Copiar código**, status,
+   lista, responsáveis, entrega, tags, descrição, **imagens anexadas**,
+   **comentários** e o botão **Abrir no ClickUp**.
+4. O botão `⟳` atualiza a lista (as tarefas ficam em cache por 30 s). `Esc`, o
+   **×** ou um clique fora fecham a modal.
 
 O token é guardado no `localStorage` do app (`canvas-terminal.clickup.v1`) e só
 é enviado para `api.clickup.com`. O backend (`src-tauri/src/clickup.rs`) usa
@@ -290,9 +362,9 @@ As cores ficam em variáveis CSS em `src/styles.css` (`:root` = escuro,
 
 ## Preferências
 
-O perfil de todas as áreas de trabalho (abas, nomes, terminais, posição,
-tamanho, estado minimizado/maximizado, zoom, pan, foco e área ativa) é salvo
-automaticamente em:
+O perfil de todas as áreas de trabalho (nomes, cores, ícones, imagens, pastas,
+terminais, posição, tamanho, estado minimizado/maximizado, zoom, pan, foco e
+área ativa) é salvo automaticamente em:
 
 ```
 localStorage["canvas-terminal.workspaces.v1"]
@@ -301,6 +373,16 @@ localStorage["canvas-terminal.workspaces.v1"]
 Use **Arquivo → Salvar** ou `Ctrl+S` para gravar imediatamente; ao concluir,
 aparece um aviso verde no canto superior direito. A ordem das abas maximizadas
 também faz parte do perfil.
+
+O zoom é salvo por área dentro de `view.zoom`. No modo maximizado o app exibe
+100% sem sobrescrever esse valor: ao restaurar, a área volta ao zoom normal.
+
+Preferências independentes do perfil:
+
+- `localStorage["canvas-terminal.rail-collapsed.v1"]` — painel lateral
+  recolhido (`1`) ou expandido (`0`); o modo maximizado recolhe sempre.
+- `localStorage["canvas-terminal.git-folder.v1"]` — pasta rastreada pelo painel
+  do Git.
 
 O layout antigo de área única (`canvas-terminal.layout.v1`) é migrado
 automaticamente para a primeira área na primeira execução desta versão.
@@ -387,9 +469,14 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools/limpar-conhosts-orfaos.ps1
 - `src/terminal-window.ts` — janela de terminal com xterm.js
 - `src/pty.ts` — wrapper do backend Tauri
 - `src/persistence.ts` — salvamento de layout
+- `src/workspace-icons.ts` — ícones e cores das áreas de trabalho
+- `src/snapping.ts` — encaixes e linhas-guia de alinhamento
+- `src/git-panel.ts` — modal de alterações do Git e seletor de pasta
 - `src/styles.css` — tema escuro
 - `src-tauri/src/shells.rs` — descoberta de shells por plataforma (`#[cfg(windows)]` / `#[cfg(unix)]`)
 - `src-tauri/src/pty.rs` — backend PTY com `portable-pty`
+- `src-tauri/src/git.rs` — status e diffs do Git para o painel lateral
+- `src-tauri/src/folders.rs` — navegação de pastas do seletor do Git
 - `src-tauri/tests/pty_test.rs` — teste de integração headless
 - `tools/limpar-conhosts-orfaos.ps1` — limpeza de hospedeiros ConPTY órfãos (Windows)
 

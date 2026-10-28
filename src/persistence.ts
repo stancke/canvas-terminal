@@ -1,8 +1,9 @@
 import type { TerminalState } from "./terminal-window";
+import { isWorkspaceIcon } from "./workspace-icons";
 
 /**
- * Layout com múltiplas áreas de trabalho (abas). Cada área guarda sua própria
- * view (pan/zoom) e seus terminais.
+ * Layout com múltiplas áreas de trabalho (painel lateral). Cada área guarda sua
+ * própria view (pan e zoom); no modo maximizado o app exibe 100%.
  *
  * A chave antiga (`layout.v1`) é migrada automaticamente para uma única área.
  */
@@ -38,6 +39,13 @@ export interface SavedWorkspace {
   terminals: SavedTerminal[];
   /** Índice do terminal que estava em foco ao sair (para reabrir no mesmo). */
   focusedIndex?: number;
+  /** Aparência da área no painel lateral. */
+  color?: string;
+  icon?: string;
+  /** Pasta usada por novos terminais e pelo painel do Git. */
+  folder?: string;
+  /** Imagem (data URL) escolhida para representar a área. */
+  image?: string;
 }
 
 export interface SavedWorkspaceLayout {
@@ -124,6 +132,23 @@ function parseTerminals(value: unknown): SavedTerminal[] {
   return terminals;
 }
 
+const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
+/** Limite generoso para a miniatura (a imagem é reduzida antes de salvar). */
+const IMAGE_MAX_LENGTH = 400_000;
+
+function parseColor(value: unknown): string | undefined {
+  return typeof value === "string" && COLOR_PATTERN.test(value)
+    ? value.toLowerCase()
+    : undefined;
+}
+
+function parseImage(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  if (!value.startsWith("data:image/")) return undefined;
+  if (value.length > IMAGE_MAX_LENGTH) return undefined;
+  return value;
+}
+
 function parseWorkspace(value: unknown, index: number): SavedWorkspace | null {
   if (typeof value !== "object" || value === null) return null;
   const w = value as Record<string, unknown>;
@@ -142,6 +167,13 @@ function parseWorkspace(value: unknown, index: number): SavedWorkspace | null {
         : `Área ${index + 1}`,
     view: w.view,
     focusedIndex,
+    color: parseColor(w.color),
+    icon: isWorkspaceIcon(w.icon) ? w.icon : undefined,
+    folder:
+      typeof w.folder === "string" && w.folder.trim()
+        ? w.folder.trim()
+        : undefined,
+    image: parseImage(w.image),
     terminals: parseTerminals(w.terminals),
   };
 }

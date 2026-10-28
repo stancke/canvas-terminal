@@ -1,6 +1,8 @@
 //! Canvas Terminal — backend Tauri 2 + portable-pty.
 
 pub mod clickup;
+pub mod folders;
+pub mod git;
 pub mod pty;
 pub mod shells;
 pub mod usage;
@@ -9,6 +11,8 @@ use clickup::{
     clickup_comments, clickup_folders, clickup_list_statuses, clickup_lists, clickup_spaces,
     clickup_task, clickup_tasks, clickup_teams, clickup_user,
 };
+use folders::list_folders;
+use git::{git_diff, git_status};
 use pty::{
     PtyState, pty_alive, pty_default_cwd, pty_kill, pty_kill_all, pty_list_shells, pty_resize,
     pty_spawn, pty_write,
@@ -43,6 +47,9 @@ pub fn run() {
             clickup_tasks,
             clickup_task,
             clickup_comments,
+            git_status,
+            git_diff,
+            list_folders,
         ])
         .build(generate_context!())
         .expect("falha ao construir aplicação Tauri")

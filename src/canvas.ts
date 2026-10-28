@@ -1,4 +1,5 @@
 import type { TerminalWindow } from "./terminal-window";
+import { SnapGuideOverlay } from "./snapping";
 
 export interface Point {
   x: number;
@@ -34,13 +35,14 @@ const KEY_PAN_SPEED = 900;
 export class Canvas {
   readonly viewport: HTMLElement;
   readonly world: HTMLElement;
+  readonly snapGuides: SnapGuideOverlay;
   private terminals: Map<number, TerminalWindow> = new Map();
 
   panX = 0;
   panY = 0;
   zoom = 1;
-  /** Espaço em pixels no topo reservado ao cabeçalho fixo no modo maximizado. */
-  topInset = 0;
+  /** No modo maximizado o zoom fica travado em 100%. */
+  zoomLocked = false;
   /** Verdadeiro quando o último clique foi em área vazia (modo navegação). */
   canvasActive = false;
 
@@ -58,7 +60,7 @@ export class Canvas {
   private lastKeyPanTime = 0;
 
   onEmptyContextMenu?: (point: Point) => void;
-  /** Avisa o app que pan/zoom mudaram (atualiza o indicador da toolbar). */
+  /** Avisa o app que pan/zoom mudaram (atualiza o indicador do menu). */
   onViewChange?: () => void;
 
   constructor(viewportSelector: string, worldSelector: string) {
@@ -67,6 +69,7 @@ export class Canvas {
     if (!viewport || !world) throw new Error("Canvas: viewport ou world não encontrado");
     this.viewport = viewport as HTMLElement;
     this.world = world as HTMLElement;
+    this.snapGuides = new SnapGuideOverlay(this.viewport);
 
     this.bindEvents();
     this.updateGrid();
@@ -126,17 +129,25 @@ export class Canvas {
     return Array.from(this.terminals.values());
   }
 
+  /** Origem do viewport na janela (o painel lateral desloca o canvas). */
+  private screenOrigin(): Point {
+    const rect = this.viewport.getBoundingClientRect();
+    return { x: rect.left, y: rect.top };
+  }
+
   screenToWorld(x: number, y: number): Point {
+    const origin = this.screenOrigin();
     return {
-      x: (x - this.panX) / this.zoom,
-      y: (y - this.panY) / this.zoom,
+      x: (x - origin.x - this.panX) / this.zoom,
+      y: (y - origin.y - this.panY) / this.zoom,
     };
   }
 
   worldToScreen(x: number, y: number): Point {
+    const origin = this.screenOrigin();
     return {
-      x: x * this.zoom + this.panX,
-      y: y * this.zoom + this.panY,
+      x: x * this.zoom + this.panX + origin.x,
+      y: y * this.zoom + this.panY + origin.y,
     };
   }
 
@@ -152,18 +163,19 @@ export class Canvas {
   }
 
   centerWorldPoint(): Point {
+    const rect = this.viewport.getBoundingClientRect();
     return this.screenToWorld(
-      this.viewport.clientWidth / 2,
-      this.viewport.clientHeight / 2,
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2,
     );
   }
 
-  setView(panX: number, panY: number, zoom: number): void {
+  setView(panX: number, panY: number, zoom: number, notify = true): void {
     this.panX = panX;
     this.panY = panY;
-    this.zoom = this.clampZoom(zoom);
+    this.zoom = this.zoomLocked ? 1 : this.clampZoom(zoom);
     this.requestRender();
-    this.onViewChange?.();
+    if (notify) this.onViewChange?.();
   }
 
   private clampZoom(zoom: number): number {
@@ -172,7 +184,12 @@ export class Canvas {
 
   /** Zoom mantendo o centro do viewport como âncora. */
   setZoomAtCenter(zoom: number): void {
-    this.zoomAt(this.viewport.clientWidth / 2, this.viewport.clientHeight / 2, zoom);
+    const rect = this.viewport.getBoundingClientRect();
+    this.zoomAt(
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2,
+      zoom,
+    );
   }
 
   zoomBy(factor: number): void {
@@ -312,6 +329,7 @@ export class Canvas {
   }
 
   private zoomAt(screenX: number, screenY: number, newZoom: number): void {
+    if (this.zoomLocked) return;
     const clamped = this.clampZoom(newZoom);
     if (clamped === this.zoom) return;
     const worldBefore = this.screenToWorld(screenX, screenY);

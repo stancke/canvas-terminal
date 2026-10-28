@@ -42,11 +42,22 @@ import {
 import { TokenUsageWidget } from "./token-usage";
 import { ClickUpPlugin } from "./clickup";
 import { initTheme, onThemeChange, themeLabel, toggleTheme } from "./theme";
+import {
+  DEFAULT_WORKSPACE_COLOR,
+  DEFAULT_WORKSPACE_ICON,
+  WORKSPACE_COLORS,
+  WORKSPACE_ICONS,
+  createWorkspaceIcon,
+  isWorkspaceIcon,
+} from "./workspace-icons";
+import { GitPanel } from "./git-panel";
 
 const DEFAULT_W = 720;
 const DEFAULT_H = 420;
-/** Altura do cabeçalho fixo quando há terminal maximizado. */
-const HEADER_HEIGHT = 42;
+/** Miniatura salva no perfil: pequena o bastante para o localStorage. */
+const WORKSPACE_IMAGE_SIZE = 96;
+const WORKSPACE_IMAGE_MAX = 380_000;
+const RAIL_COLLAPSED_KEY = "canvas-terminal.rail-collapsed.v1";
 
 interface Workspace {
   id: string;
@@ -60,6 +71,13 @@ interface Workspace {
   lastFocusedId?: number;
   /** Índice do terminal focado, persistido para reabrir no mesmo. */
   focusedIndex?: number;
+  /** Aparência no painel lateral. */
+  color: string;
+  icon: string;
+  /** Pasta padrão dos novos terminais desta área. */
+  folder: string;
+  /** Miniatura (data URL) que substitui o ícone. */
+  image: string;
 }
 
 let canvas: Canvas;
@@ -70,23 +88,27 @@ let quickCommands: QuickCommand[] = [];
 let pluginSettings: PluginSettings = { enabled: {} };
 let tokenUsageWidget: TokenUsageWidget | null = null;
 let clickUpPlugin: ClickUpPlugin | null = null;
+let gitPanel: GitPanel | null = null;
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
-let toolbarForcedOpen = false;
 let workspaces: Workspace[] = [];
 let activeWorkspace: Workspace | null = null;
+/** Preferência do usuário para o painel lateral (maximizado sempre recolhe). */
+let railUserCollapsed = false;
 /** Ordem dos grupos (áreas) exibida somente nas abas do modo maximizado. */
 let tabGroupOrder: string[] = [];
 
-const toolbar = {
+const ui = {
   shellSelect: document.querySelector<HTMLSelectElement>("#shell-select")!,
   fullscreenBtn: document.querySelector<HTMLButtonElement>("#btn-fullscreen")!,
   zoom: document.querySelector<HTMLSpanElement>("#zoom-indicator")!,
   count: document.querySelector<HTMLSpanElement>("#terminal-count")!,
   coords: document.querySelector<HTMLSpanElement>("#coords")!,
+  appMenu: document.querySelector<HTMLElement>("#app-menu")!,
+  appMenuButton: document.querySelector<HTMLButtonElement>("#rail-app-menu")!,
 };
 
-const menuEls = Array.from(document.querySelectorAll<HTMLElement>("#menubar .menu"));
+const menuEls = Array.from(document.querySelectorAll<HTMLElement>("#app-menu .menu"));
 
 const contextMenu = document.querySelector<HTMLDivElement>("#context-menu")!;
 
@@ -126,15 +148,19 @@ async function main(): Promise<void> {
   shells = await listShells();
   populateShellSelect();
 
-  bindToolbar();
-  bindWorkspaceTabs();
+  bindAppChrome();
+  bindWorkspaceRail();
   bindQuickPanel();
   bindPlugins();
   bindGlobalShortcuts();
-  bindAutoHideToolbar();
   bindFullscreenWatcher();
   bindContextMenu();
   bindTitlebarContext();
+
+  gitPanel = new GitPanel(
+    document.getElementById("git-modal")!,
+    () => suggestGitFolder(),
+  );
 
   await restoreWorkspaces();
   updateStatus();
@@ -146,17 +172,17 @@ async function main(): Promise<void> {
 }
 
 function populateShellSelect(): void {
-  toolbar.shellSelect.innerHTML = "";
+  ui.shellSelect.innerHTML = "";
   for (const shell of shells) {
     const opt = document.createElement("option");
     opt.value = shell.id;
     opt.textContent = shell.name;
-    toolbar.shellSelect.appendChild(opt);
+    ui.shellSelect.appendChild(opt);
   }
 }
 
 function selectedShell(): string {
-  return toolbar.shellSelect.value || shells[0]?.id || "";
+  return ui.shellSelect.value || shells[0]?.id || "";
 }
 
 async function addTerminalAtCenter(): Promise<void> {
@@ -225,7 +251,7 @@ async function createTerminalForWorkspace(
       (entry) => entry.id === workspace.lastFocusedId,
     );
     workspace.focusedIndex = focusedIndex >= 0 ? focusedIndex : undefined;
-    renderWorkspaceTabs();
+    renderWorkspaceRail();
     // Atualiza as abas agrupadas do terminal maximizado (inclusive grupos de
     // áreas que não estão ativas).
     notifyTerminalTabsChanged();
@@ -269,7 +295,7 @@ async function addTerminalToWorkspace(
   title?: string,
   startupCommand?: string,
 ): Promise<TerminalWindow> {
-  const cwdPath = cwd || (await defaultCwd());
+  const cwdPath = cwd || workspace.folder || (await defaultCwd());
   const terminalTitle = terminalTitleFor(workspace, shellId, title);
   const terminal = await createTerminalForWorkspace(
     workspace,
@@ -284,6 +310,7 @@ async function addTerminalToWorkspace(
   );
 
   workspace.terminals.push(terminal);
+  renderWorkspaceRail();
   if (workspace === activeWorkspace) {
     const previousMaximized = workspace.terminals.find(
       (entry) => entry.maximized && entry !== terminal,
@@ -309,14 +336,117 @@ function syncThemeButton(): void {
   if (label) label.textContent = themeLabel();
 }
 
-function bindToolbar(): void {
+function bindAppChrome(): void {
   bindMenubar();
   bindMenuActions();
   bindDialog();
-  toolbar.fullscreenBtn.addEventListener("click", () => void toggleFullscreen());
+  ui.fullscreenBtn.addEventListener("click", () => void toggleFullscreen());
+  ui.appMenuButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleAppMenu();
+  });
+  document.getElementById("app-menu-close")?.addEventListener("click", () => {
+    closeAppMenu();
+    ui.appMenuButton.focus();
+  });
+  // O handler global ignora Esc quando o foco está em um campo do menu; aqui
+  // o painel fecha mesmo a partir do seletor de shell.
+  ui.appMenu.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeAppMenu();
+    ui.appMenuButton.focus();
+  });
+
+  bindRailState();
 }
 
-/* ---- Menus do cabeçalho ---- */
+/* ---- Menu do aplicativo (antigo cabeçalho) ---- */
+
+function appMenuOpen(): boolean {
+  return !ui.appMenu.classList.contains("hidden");
+}
+
+function openAppMenu(): void {
+  ui.appMenu.classList.remove("hidden");
+  ui.appMenuButton.setAttribute("aria-expanded", "true");
+}
+
+/** Fecha o painel do menu; devolve `true` se ele estava aberto. */
+function closeAppMenu(): boolean {
+  if (!appMenuOpen()) return false;
+  closeAllMenus();
+  ui.appMenu.classList.add("hidden");
+  ui.appMenuButton.setAttribute("aria-expanded", "false");
+  return true;
+}
+
+function toggleAppMenu(): void {
+  if (appMenuOpen()) closeAppMenu();
+  else openAppMenu();
+}
+
+/* ---- Recolher / expandir o painel lateral ---- */
+
+/**
+ * Aplica o estado do painel: a preferência do usuário, forçada a recolhido
+ * quando há um terminal maximizado (o canvas usa a largura toda).
+ * Devolve `true` se a classe mudou nesta chamada.
+ */
+function applyRailState(): boolean {
+  const maximized = document.body.classList.contains("terminal-maximized");
+  const collapsed = railUserCollapsed || maximized;
+  const changed = document.body.classList.contains("rail-collapsed") !== collapsed;
+  document.body.classList.toggle("rail-collapsed", collapsed);
+
+  const toggle = document.getElementById("rail-toggle");
+  if (toggle) {
+    const label = collapsed
+      ? "Expandir painel lateral"
+      : "Recolher painel lateral";
+    toggle.title = label;
+    toggle.setAttribute("aria-label", label);
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+  }
+  return changed;
+}
+
+function setRailUserCollapsed(value: boolean): void {
+  railUserCollapsed = value;
+  try {
+    localStorage.setItem(RAIL_COLLAPSED_KEY, value ? "1" : "0");
+  } catch {
+    // Ignora quota/escrita bloqueada.
+  }
+  if (value) closeAppMenu();
+  if (applyRailState()) refreshMaximizedGeometry();
+}
+
+function bindRailState(): void {
+  try {
+    railUserCollapsed = localStorage.getItem(RAIL_COLLAPSED_KEY) === "1";
+  } catch {
+    railUserCollapsed = false;
+  }
+  document.getElementById("rail-toggle")?.addEventListener("click", () => {
+    // No modo maximizado a alça fica oculta; a guarda evita estados estranhos.
+    if (document.body.classList.contains("terminal-maximized")) return;
+    setRailUserCollapsed(!railUserCollapsed);
+  });
+  applyRailState();
+}
+
+/** Fecha o painel quando o clique acontece fora da alça e do próprio painel. */
+function bindAppMenuDismiss(): void {
+  document.addEventListener("click", (event) => {
+    if (!appMenuOpen()) return;
+    const target = event.target as Node;
+    if (ui.appMenu.contains(target) || ui.appMenuButton.contains(target)) return;
+    if ((event.target as HTMLElement).closest("#context-menu")) return;
+    closeAppMenu();
+  });
+}
 
 function openMenu(menu: HTMLElement): void {
   for (const other of menuEls) {
@@ -340,8 +470,6 @@ function closeAllMenus(): boolean {
 }
 
 function bindMenubar(): void {
-  const menubar = document.getElementById("menubar")!;
-
   for (const menu of menuEls) {
     const button = menu.querySelector<HTMLButtonElement>(".menu-button")!;
     button.addEventListener("click", (e) => {
@@ -356,14 +484,17 @@ function bindMenubar(): void {
   }
 
   document.addEventListener("click", (e) => {
-    if (!menubar.contains(e.target as Node)) closeAllMenus();
+    if (!ui.appMenu.contains(e.target as Node)) closeAllMenus();
   });
+
+  bindAppMenuDismiss();
 }
 
 function bindMenuActions(): void {
   const on = (id: string, action: () => void) => {
     document.getElementById(id)?.addEventListener("click", () => {
       closeAllMenus();
+      closeAppMenu();
       action();
     });
   };
@@ -379,6 +510,10 @@ function bindMenuActions(): void {
   on("menu-fullscreen", () => void toggleFullscreen());
 
   on("menu-new-workspace", () => void createWorkspace());
+  on("menu-edit-workspace", () => {
+    if (activeWorkspace) editWorkspace(activeWorkspace);
+    else flashHint("Nenhuma área de trabalho ativa.");
+  });
   on("menu-next-workspace", () => void cycleWorkspace(1));
   on("menu-prev-workspace", () => void cycleWorkspace(-1));
   on("menu-organize", () => organizeTerminals());
@@ -835,7 +970,7 @@ function applyPluginStates(): void {
   clickUpPlugin?.setEnabled(isPluginEnabled(pluginSettings, "clickup"));
 }
 
-/* ---- Áreas de trabalho (abas) ---- */
+/* ---- Áreas de trabalho (painel lateral) ---- */
 
 function makeWorkspaceId(): string {
   try {
@@ -852,6 +987,10 @@ function nextWorkspaceName(): string {
   return `Área ${index}`;
 }
 
+function nextWorkspaceColor(): string {
+  return WORKSPACE_COLORS[workspaces.length % WORKSPACE_COLORS.length];
+}
+
 function makeWorkspace(name?: string, view?: SavedView): Workspace {
   return {
     id: makeWorkspaceId(),
@@ -862,10 +1001,14 @@ function makeWorkspace(name?: string, view?: SavedView): Workspace {
     initialized: true,
     lastFocusedId: undefined,
     focusedIndex: undefined,
+    color: nextWorkspaceColor(),
+    icon: DEFAULT_WORKSPACE_ICON,
+    folder: "",
+    image: "",
   };
 }
 
-function savedToWorkspace(saved: SavedWorkspace): Workspace {
+function savedToWorkspace(saved: SavedWorkspace, index = 0): Workspace {
   return {
     id: saved.id,
     name: saved.name,
@@ -875,6 +1018,13 @@ function savedToWorkspace(saved: SavedWorkspace): Workspace {
     initialized: false,
     lastFocusedId: undefined,
     focusedIndex: saved.focusedIndex,
+    color:
+      saved.color ??
+      WORKSPACE_COLORS[index % WORKSPACE_COLORS.length] ??
+      DEFAULT_WORKSPACE_COLOR,
+    icon: isWorkspaceIcon(saved.icon) ? saved.icon : DEFAULT_WORKSPACE_ICON,
+    folder: saved.folder ?? "",
+    image: saved.image ?? "",
   };
 }
 
@@ -981,7 +1131,14 @@ async function showWorkspace(
   await instantiateWorkspace(workspace);
 
   activeWorkspace = workspace;
-  canvas.setView(workspace.view.panX, workspace.view.panY, workspace.view.zoom);
+  // Cada área tem o seu zoom. No modo maximizado ele é sempre 100%.
+  const maximizedMode = !forceNormal && workspaceIsMaximized(workspace);
+  canvas.zoomLocked = maximizedMode;
+  canvas.setView(
+    workspace.view.panX,
+    workspace.view.panY,
+    maximizedMode ? 1 : (workspace.view.zoom || 1),
+  );
   canvas.attachTerminals(workspace.terminals);
 
   // Navegação feita a partir do modo normal: a área de destino abre normal,
@@ -1020,7 +1177,7 @@ async function showWorkspace(
     canvas.setCanvasActive(true);
   }
 
-  renderWorkspaceTabs();
+  renderWorkspaceRail();
   updateStatus();
 }
 
@@ -1047,10 +1204,16 @@ async function switchToWorkspace(
   await instantiateWorkspace(target);
 
   if (activeWorkspace) {
+    // Enquanto o zoom está travado (maximizado) ou a área tem um terminal
+    // maximizado, preserva o zoom normal da área em vez de salvar o 100%.
+    const keepZoom =
+      canvas.zoomLocked ||
+      workspaceIsMaximized(activeWorkspace) ||
+      document.body.classList.contains("terminal-maximized");
     activeWorkspace.view = {
       panX: canvas.panX,
       panY: canvas.panY,
-      zoom: canvas.zoom,
+      zoom: keepZoom ? activeWorkspace.view.zoom : canvas.zoom,
     };
     canvas.detachTerminals();
   }
@@ -1088,15 +1251,19 @@ async function restoreWorkspaces(): Promise<void> {
     await showWorkspace(workspace);
   }
 
-  renderWorkspaceTabs();
+  renderWorkspaceRail();
 }
 
 async function createWorkspace(): Promise<void> {
   await withWorkspaceLock(async () => {
-    const workspace = makeWorkspace(undefined, { panX: 0, panY: 0, zoom: 1 });
+    const workspace = makeWorkspace(undefined, {
+      panX: 0,
+      panY: 0,
+      zoom: 1,
+    });
     workspaces.push(workspace);
     tabGroupOrder.push(workspace.id);
-    renderWorkspaceTabs();
+    renderWorkspaceRail();
     notifyTerminalTabsChanged();
     await switchToWorkspace(workspace);
     await addTerminalAtCenter();
@@ -1252,21 +1419,41 @@ async function selectTerminalTab(ref: TerminalTabRef): Promise<void> {
   });
 }
 
-function bindWorkspaceTabs(): void {
+function bindWorkspaceRail(): void {
   document.getElementById("workspace-add")?.addEventListener("click", () => {
     void createWorkspace();
   });
 
-  const list = document.getElementById("workspace-tab-list");
-  list?.addEventListener(
-    "wheel",
-    (event) => {
-      if (event.ctrlKey || list.scrollWidth <= list.clientWidth) return;
-      list.scrollLeft += event.deltaY || event.deltaX;
-      event.preventDefault();
-    },
-    { passive: false },
-  );
+  document.getElementById("rail-git")?.addEventListener("click", () => {
+    closeAppMenu();
+    gitPanel?.open();
+  });
+
+  // Navegação por setas entre as áreas (padrão de tablist vertical).
+  const list = document.getElementById("workspace-rail-list");
+  list?.addEventListener("keydown", (event) => {
+    if (
+      event.key !== "ArrowDown" &&
+      event.key !== "ArrowUp" &&
+      event.key !== "Home" &&
+      event.key !== "End"
+    ) {
+      return;
+    }
+    const buttons = Array.from(
+      list.querySelectorAll<HTMLButtonElement>(".rail-workspace"),
+    );
+    if (buttons.length === 0) return;
+    event.preventDefault();
+    const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    let next = current < 0 ? 0 : current;
+    if (event.key === "ArrowDown") next = (next + 1) % buttons.length;
+    else if (event.key === "ArrowUp") {
+      next = (next - 1 + buttons.length) % buttons.length;
+    } else if (event.key === "Home") next = 0;
+    else next = buttons.length - 1;
+    buttons[next]?.focus();
+  });
 
   document.addEventListener("terminal-tab-reorder", ((event: Event) => {
     reorderTerminalTab(
@@ -1280,79 +1467,106 @@ function bindWorkspaceTabs(): void {
   }) as EventListener);
 }
 
-function renderWorkspaceTabs(): void {
-  const list = document.getElementById("workspace-tab-list");
+/** Iniciais exibidas quando a área usa o ícone de letras. */
+function workspaceInitials(workspace: Workspace): string {
+  const parts = workspace.name.trim().split(/\s+/).filter(Boolean);
+  const initials = parts.map((part) => part[0]).join("").slice(0, 2);
+  return (initials || "?").toUpperCase();
+}
+
+function workspaceHasTerminals(workspace: Workspace): boolean {
+  return workspace.initialized
+    ? workspace.terminals.length > 0
+    : workspace.pending.length > 0;
+}
+
+/** Uma área está no modo maximizado quando algum terminal está maximizado. */
+function workspaceIsMaximized(workspace: Workspace | null): boolean {
+  return !!workspace?.terminals.some((terminal) => terminal.maximized);
+}
+
+function renderWorkspaceRail(): void {
+  const list = document.getElementById("workspace-rail-list");
   if (!list) return;
   list.innerHTML = "";
 
   for (const workspace of workspaces) {
-    const tab = document.createElement("div");
-    tab.className =
-      "workspace-tab" + (workspace === activeWorkspace ? " active" : "");
-    tab.setAttribute("role", "tab");
-    tab.setAttribute("aria-selected", String(workspace === activeWorkspace));
-    tab.tabIndex = 0;
-    tab.title = workspace.name;
-
-    const name = document.createElement("span");
-    name.className = "tab-name";
-    name.textContent = workspace.name;
-    name.addEventListener("dblclick", (event) => {
-      event.stopPropagation();
-      startWorkspaceRename(workspace, name);
-    });
-    tab.appendChild(name);
-
-    tab.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if ((event.target as HTMLElement).closest(".tab-close")) return;
-      showWorkspaceTabContextMenu(event.clientX, event.clientY, workspace, name);
-    });
-
-    if (workspaces.length > 1) {
-      const close = document.createElement("button");
-      close.type = "button";
-      close.className = "tab-close";
-      close.title = "Fechar área de trabalho";
-      close.textContent = "×";
-      close.addEventListener("click", (event) => {
-        event.stopPropagation();
-        requestCloseWorkspace(workspace);
-      });
-      tab.appendChild(close);
+    const active = workspace === activeWorkspace;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "rail-workspace" + (active ? " active" : "");
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+    button.title = workspace.folder
+      ? `${workspace.name}\n${workspace.folder}`
+      : workspace.name;
+    button.dataset.workspaceId = workspace.id;
+    button.style.setProperty("--ws-color", workspace.color);
+    button.style.color = workspace.color;
+    if (active) {
+      button.style.background = `${workspace.color}24`;
+      button.style.borderColor = `${workspace.color}70`;
     }
 
-    tab.addEventListener("click", (event) => {
-      if ((event.target as HTMLElement).closest(".tab-close")) return;
+    if (workspace.image) {
+      const image = document.createElement("img");
+      image.className = "rail-workspace-image";
+      image.src = workspace.image;
+      image.alt = "";
+      button.appendChild(image);
+    } else if (workspace.icon === "letters") {
+      const letters = document.createElement("span");
+      letters.className = "rail-workspace-letters";
+      letters.textContent = workspaceInitials(workspace);
+      button.appendChild(letters);
+    } else {
+      button.appendChild(createWorkspaceIcon(workspace.icon, 22));
+    }
+
+    if (workspaceHasTerminals(workspace)) {
+      const dot = document.createElement("span");
+      dot.className = "rail-workspace-dot";
+      dot.title = "Terminais abertos nesta área";
+      button.appendChild(dot);
+    }
+
+    button.addEventListener("click", () => {
       void activateWorkspace(workspace.id);
     });
-    tab.addEventListener("keydown", (event) => {
-      if ((event.target as HTMLElement).closest(".tab-close")) return;
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        void activateWorkspace(workspace.id);
-      }
+    button.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      editWorkspace(workspace, true);
+    });
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showWorkspaceContextMenu(event.clientX, event.clientY, workspace);
+    });
+    button.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      void activateWorkspace(workspace.id);
     });
 
-    list.appendChild(tab);
+    list.appendChild(button);
   }
 
   list
-    .querySelector<HTMLElement>(".workspace-tab.active")
-    ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    .querySelector<HTMLElement>(".rail-workspace.active")
+    ?.scrollIntoView({ block: "nearest" });
 }
 
-function showWorkspaceTabContextMenu(
+function showWorkspaceContextMenu(
   x: number,
   y: number,
   workspace: Workspace,
-  nameEl: HTMLElement,
 ): void {
+  closeAppMenu();
   const items = [
     {
-      label: "Renomear área de trabalho",
-      action: () => startWorkspaceRename(workspace, nameEl),
+      label: "Editar área de trabalho",
+      action: () => editWorkspace(workspace),
     },
   ];
   if (workspaces.length > 1) {
@@ -1364,43 +1578,320 @@ function showWorkspaceTabContextMenu(
   renderContextMenu(items, x, y);
 }
 
-function startWorkspaceRename(workspace: Workspace, nameEl: HTMLElement): void {
-  if (nameEl.isContentEditable) return;
-  nameEl.contentEditable = "true";
-  nameEl.classList.add("editing");
-  nameEl.focus();
+/* ---- Editar área de trabalho (nome, cor, ícone, imagem e pasta) ---- */
 
-  const range = document.createRange();
-  range.selectNodeContents(nameEl);
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
+function workspaceEditorHtml(workspace: Workspace): string {
+  const swatches = WORKSPACE_COLORS.map(
+    (color) =>
+      `<button type="button" class="workspace-color" data-color="${color}"` +
+      ` style="--ws-color:${color}" title="${color}" aria-label="Cor ${color}"></button>`,
+  ).join("");
 
-  const finish = (commit: boolean) => {
-    nameEl.removeEventListener("keydown", onKey, true);
-    nameEl.removeEventListener("blur", onBlur, true);
-    const value = (nameEl.textContent || "").trim();
-    nameEl.contentEditable = "false";
-    nameEl.classList.remove("editing");
-    if (commit && value) workspace.name = value;
-    renderWorkspaceTabs();
-    notifyTerminalTabsChanged();
-    persist();
+  const icons = WORKSPACE_ICONS.map((icon) => {
+    const preview =
+      icon.id === "letters"
+        ? `<span class="workspace-icon-letters">${escapeHtml(
+            workspaceInitials(workspace),
+          )}</span>`
+        : `<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor"` +
+          ` stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">` +
+          icon.markup +
+          `</svg>`;
+    return (
+      `<button type="button" class="workspace-icon-option" data-icon="${icon.id}"` +
+      ` title="${icon.label}" aria-label="${icon.label}">${preview}</button>`
+    );
+  }).join("");
+
+  return `
+    <div class="workspace-edit-head">
+      <span id="ws-edit-preview" class="workspace-edit-preview"></span>
+      <span class="workspace-edit-titles">
+        <span id="ws-edit-title" class="workspace-edit-title"></span>
+        <span class="workspace-edit-subtitle">Área de trabalho</span>
+      </span>
+    </div>
+
+    <label class="dialog-field">
+      <span class="dialog-field-label">Nome</span>
+      <input id="ws-edit-name" class="dialog-input" type="text" maxlength="80"
+        placeholder="Nome da área de trabalho" value="${escapeHtml(workspace.name)}" />
+    </label>
+
+    <div class="dialog-field">
+      <span class="dialog-field-label">Cor</span>
+      <div id="ws-edit-colors" class="workspace-colors">${swatches}</div>
+    </div>
+
+    <div class="dialog-field">
+      <span class="dialog-field-label">Ícone</span>
+      <div id="ws-edit-icons" class="workspace-icons">${icons}</div>
+    </div>
+
+    <div class="dialog-field">
+      <span class="dialog-field-label">Imagem</span>
+      <div class="workspace-image-row">
+        <button type="button" id="ws-edit-image-pick" class="dialog-button">
+          Escolher uma imagem...
+        </button>
+        <button type="button" id="ws-edit-image-clear" class="dialog-link">Remover</button>
+        <input id="ws-edit-image-input" type="file" accept="image/*" class="hidden" />
+      </div>
+      <p class="dialog-hint">A imagem substitui o ícone no painel lateral.</p>
+    </div>
+
+    <div class="dialog-field">
+      <span class="dialog-field-label">Pasta</span>
+      <div class="workspace-folder-row">
+        <input id="ws-edit-folder" class="dialog-input" type="text" maxlength="4096"
+          placeholder="Nenhuma: novos terminais seguem as configurações"
+          value="${escapeHtml(workspace.folder)}" />
+        <button type="button" id="ws-edit-folder-pick" class="dialog-button"
+          title="Usar a pasta do terminal em foco (ou a pasta padrão)">Escolher...</button>
+      </div>
+      <p class="dialog-hint">
+        Novos terminais desta área abrem nesta pasta. O painel do Git usa a
+        pasta escolhida dentro dele.
+      </p>
+    </div>
+  `;
+}
+
+function editWorkspace(workspace: Workspace, focusName = false): void {
+  closeAppMenu();
+  const draft = {
+    color: workspace.color || DEFAULT_WORKSPACE_COLOR,
+    icon: isWorkspaceIcon(workspace.icon)
+      ? workspace.icon
+      : DEFAULT_WORKSPACE_ICON,
+    image: workspace.image || "",
   };
-  const onKey = (event: KeyboardEvent) => {
-    event.stopPropagation();
-    if (event.key === "Enter") {
-      event.preventDefault();
-      finish(true);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      finish(false);
+
+  showConfirm(
+    "Editar área de trabalho",
+    workspaceEditorHtml(workspace),
+    "Salvar",
+    () => {
+      const nameInput = document.getElementById(
+        "ws-edit-name",
+      ) as HTMLInputElement | null;
+      const folderInput = document.getElementById(
+        "ws-edit-folder",
+      ) as HTMLInputElement | null;
+      const name = nameInput?.value.trim() ?? "";
+      if (name) workspace.name = name;
+      workspace.color = draft.color;
+      workspace.icon = draft.icon;
+      workspace.image = draft.image;
+      workspace.folder = folderInput?.value.trim() ?? "";
+      renderWorkspaceRail();
+      notifyTerminalTabsChanged();
+      persist();
+      updateStatus();
+    },
+  );
+
+  const preview = document.getElementById("ws-edit-preview")!;
+  const title = document.getElementById("ws-edit-title")!;
+  const nameInput = document.getElementById(
+    "ws-edit-name",
+  ) as HTMLInputElement;
+  const folderInput = document.getElementById(
+    "ws-edit-folder",
+  ) as HTMLInputElement;
+  const imageInput = document.getElementById(
+    "ws-edit-image-input",
+  ) as HTMLInputElement;
+  const colorButtons = Array.from(
+    document.querySelectorAll<HTMLButtonElement>("#ws-edit-colors .workspace-color"),
+  );
+  const iconButtons = Array.from(
+    document.querySelectorAll<HTMLButtonElement>("#ws-edit-icons .workspace-icon-option"),
+  );
+
+  const refreshPreview = () => {
+    preview.innerHTML = "";
+    preview.style.setProperty("--ws-color", draft.color);
+    preview.style.background = `${draft.color}22`;
+    preview.style.borderColor = `${draft.color}66`;
+    if (draft.image) {
+      const image = document.createElement("img");
+      image.src = draft.image;
+      image.alt = "";
+      preview.appendChild(image);
+    } else if (draft.icon === "letters") {
+      const letters = document.createElement("span");
+      letters.className = "workspace-edit-letters";
+      letters.textContent = workspaceInitials({
+        ...workspace,
+        name: nameInput.value || workspace.name,
+      });
+      preview.appendChild(letters);
+    } else {
+      const icon = createWorkspaceIcon(draft.icon, 24);
+      icon.style.color = draft.color;
+      preview.appendChild(icon);
+    }
+    preview.style.color = draft.color;
+    title.textContent = nameInput.value.trim() || workspace.name;
+
+    for (const button of colorButtons) {
+      button.classList.toggle("selected", button.dataset.color === draft.color);
+    }
+    for (const button of iconButtons) {
+      button.classList.toggle(
+        "selected",
+        !draft.image && button.dataset.icon === draft.icon,
+      );
+    }
+
+    const lettersPreview = document.querySelector<HTMLElement>(
+      "#ws-edit-icons .workspace-icon-letters",
+    );
+    if (lettersPreview) {
+      lettersPreview.textContent = workspaceInitials({
+        ...workspace,
+        name: nameInput.value || workspace.name,
+      });
     }
   };
-  const onBlur = () => finish(true);
 
-  nameEl.addEventListener("keydown", onKey, true);
-  nameEl.addEventListener("blur", onBlur, true);
+  const selectColor = (color: string) => {
+    draft.color = color;
+    refreshPreview();
+  };
+  const selectIcon = (icon: string) => {
+    draft.icon = icon;
+    draft.image = "";
+    refreshPreview();
+  };
+
+  for (const button of colorButtons) {
+    button.addEventListener("click", () => selectColor(button.dataset.color || draft.color));
+  }
+  for (const button of iconButtons) {
+    button.addEventListener("click", () => selectIcon(button.dataset.icon || draft.icon));
+  }
+
+  nameInput.addEventListener("input", refreshPreview);
+  nameInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDialog();
+      return;
+    }
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    (document.getElementById("dialog-confirm") as HTMLButtonElement | null)?.click();
+  });
+  folderInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    closeDialog();
+  });
+
+  document
+    .getElementById("ws-edit-image-pick")
+    ?.addEventListener("click", () => imageInput.click());
+  document
+    .getElementById("ws-edit-image-clear")
+    ?.addEventListener("click", () => {
+      draft.image = "";
+      refreshPreview();
+    });
+  imageInput.addEventListener("change", () => {
+    const file = imageInput.files?.[0];
+    imageInput.value = "";
+    if (!file) return;
+    void fileToWorkspaceImage(file)
+      .then((dataUrl) => {
+        draft.image = dataUrl;
+        refreshPreview();
+      })
+      .catch((err) => {
+        flashHint(err instanceof Error ? err.message : "Imagem não suportada.");
+      });
+  });
+
+  document
+    .getElementById("ws-edit-folder-pick")
+    ?.addEventListener("click", () => {
+      void (async () => {
+        const candidate =
+          focusedTerminal?.cwd || (await defaultCwd().catch(() => ""));
+        if (!candidate) {
+          folderInput.focus();
+          flashHint("Digite o caminho da pasta.");
+          return;
+        }
+        folderInput.value = candidate;
+        folderInput.focus();
+      })();
+    });
+
+  refreshPreview();
+  if (focusName) {
+    nameInput.focus();
+    nameInput.select();
+  } else {
+    nameInput.focus();
+    nameInput.setSelectionRange(nameInput.value.length, nameInput.value.length);
+  }
+}
+
+/** Reduz a imagem escolhida para uma miniatura pequena (localStorage). */
+function fileToWorkspaceImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith("image/")) {
+      reject(new Error("Selecione um arquivo de imagem."));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Não foi possível ler a imagem."));
+    reader.onload = () => {
+      const source = String(reader.result || "");
+      const image = new Image();
+      image.onerror = () => reject(new Error("Imagem inválida."));
+      image.onload = () => {
+        if (!image.width || !image.height) {
+          reject(new Error("Imagem inválida."));
+          return;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = WORKSPACE_IMAGE_SIZE;
+        canvas.height = WORKSPACE_IMAGE_SIZE;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          reject(new Error("Não foi possível processar a imagem."));
+          return;
+        }
+        const scale = Math.max(
+          WORKSPACE_IMAGE_SIZE / image.width,
+          WORKSPACE_IMAGE_SIZE / image.height,
+        );
+        const width = image.width * scale;
+        const height = image.height * scale;
+        context.drawImage(
+          image,
+          (WORKSPACE_IMAGE_SIZE - width) / 2,
+          (WORKSPACE_IMAGE_SIZE - height) / 2,
+          width,
+          height,
+        );
+        let dataUrl = canvas.toDataURL("image/png");
+        if (dataUrl.length > WORKSPACE_IMAGE_MAX) {
+          dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+        }
+        if (dataUrl.length > WORKSPACE_IMAGE_MAX) {
+          reject(new Error("Imagem muito grande. Use uma imagem menor."));
+          return;
+        }
+        resolve(dataUrl);
+      };
+      image.src = source;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function requestCloseWorkspace(workspace: Workspace): void {
@@ -1443,7 +1934,7 @@ async function removeWorkspace(workspace: Workspace): Promise<void> {
     workspaces = workspaces.filter((entry) => entry !== workspace);
     tabGroupOrder = tabGroupOrder.filter((id) => id !== workspace.id);
 
-    renderWorkspaceTabs();
+    renderWorkspaceRail();
     notifyTerminalTabsChanged();
     updateStatus();
     persist();
@@ -1465,64 +1956,6 @@ function escapeHtml(value: string): string {
         return "&#39;";
     }
   });
-}
-
-/** O cabeçalho fica escondido e desce quando o mouse encosta no topo da tela. */
-function bindAutoHideToolbar(): void {
-  const bar = document.getElementById("toolbar")!;
-  const hotzone = document.getElementById("toolbar-hotzone")!;
-  let hideTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const show = () => {
-    if (hideTimer) {
-      clearTimeout(hideTimer);
-      hideTimer = null;
-    }
-    // No modo maximizado o cabeçalho só abre pelo botão ☰.
-    if (document.body.classList.contains("terminal-maximized")) return;
-    bar.classList.add("visible");
-  };
-
-  const scheduleHide = (delay = 350) => {
-    if (hideTimer) clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      hideTimer = null;
-      // O cabeçalho aberto pelo botão do modo maximizado não fecha sozinho.
-      if (document.body.classList.contains("terminal-maximized")) return;
-      if (bar.contains(document.activeElement)) return;
-      if (bar.querySelector(".menu.open")) return;
-      if (bar.matches(":hover")) return;
-      bar.classList.remove("visible");
-    }, delay);
-  };
-
-  hotzone.addEventListener("mouseenter", show);
-  hotzone.addEventListener("click", show);
-  bar.addEventListener("mouseenter", show);
-  bar.addEventListener("mouseleave", () => scheduleHide());
-  bar.addEventListener("focusin", show);
-  bar.addEventListener("focusout", () => scheduleHide());
-
-  // Clicar fora do cabeçalho fecha o menu aberto pelo botão ☰.
-  document.addEventListener("click", (event) => {
-    if (!toolbarForcedOpen) return;
-    const target = event.target as HTMLElement;
-    if (
-      bar.contains(target) ||
-      target.closest(".term-menu-btn") ||
-      target.closest("#context-menu")
-    ) {
-      return;
-    }
-    toolbarForcedOpen = false;
-    bar.classList.remove("visible");
-    if (updateMaximizedInset()) refreshMaximizedGeometry();
-  });
-
-  // Abre visível por alguns segundos: dá tempo de descobrir os menus antes de
-  // a barra se esconder sozinha.
-  show();
-  scheduleHide(2500);
 }
 
 function bindFullscreenWatcher(): void {
@@ -1586,10 +2019,9 @@ function setFullscreenUi(on: boolean): void {
   document.body.classList.toggle("fullscreen-mode", on);
   const label = document.querySelector<HTMLElement>("#menu-fullscreen .menu-label");
   if (label) label.textContent = on ? "Sair da tela cheia" : "Tela cheia";
-  toolbar.fullscreenBtn.title = on ? "Sair da tela cheia (F11)" : "Tela cheia (F11)";
-  toolbar.fullscreenBtn.setAttribute("aria-pressed", on ? "true" : "false");
-  toolbarForcedOpen = false;
-  document.getElementById("toolbar")?.classList.remove("visible");
+  ui.fullscreenBtn.title = on ? "Sair da tela cheia (F11)" : "Tela cheia (F11)";
+  ui.fullscreenBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  closeAppMenu();
   syncMaximizedView();
   // O viewport mudou de tamanho: reavalia grid e janelas maximizadas.
   refreshMaximizedGeometry();
@@ -1647,14 +2079,15 @@ function bindGlobalShortcuts(): void {
           own();
           return;
         }
+        if (gitPanel?.close()) {
+          own();
+          return;
+        }
         if (closeAllMenus()) {
           own();
           return;
         }
-        if (toolbarForcedOpen) {
-          toolbarForcedOpen = false;
-          document.getElementById("toolbar")?.classList.remove("visible");
-          if (updateMaximizedInset()) refreshMaximizedGeometry();
+        if (closeAppMenu()) {
           own();
           return;
         }
@@ -1752,8 +2185,8 @@ function bindGlobalShortcuts(): void {
 
 /** True quando o foco está num campo de digitação do próprio app (não num terminal). */
 function isTyping(e: KeyboardEvent): boolean {
-  const target = e.target as HTMLElement | null;
-  if (!target) return false;
+  const target = e.target;
+  if (!(target instanceof HTMLElement)) return false;
   if (isInsideTerminal(target)) return false;
   return (
     target.tagName === "INPUT" ||
@@ -1763,7 +2196,8 @@ function isTyping(e: KeyboardEvent): boolean {
 }
 
 /** O xterm.js captura a digitação num <textarea> oculto: atalhos globais seguem valendo. */
-function isInsideTerminal(el: HTMLElement): boolean {
+function isInsideTerminal(el: unknown): boolean {
+  if (!(el instanceof HTMLElement)) return false;
   return el.classList.contains("xterm-helper-textarea") || !!el.closest(".term-body");
 }
 
@@ -1826,15 +2260,14 @@ function resetZoom(): void {
 }
 
 function updateStatus(): void {
-  toolbar.zoom.textContent = `${Math.round(canvas.zoom * 100)}%`;
-  toolbar.count.textContent = String(canvas.getAllTerminals().length);
   syncMaximizedView();
+  ui.zoom.textContent = `${Math.round(canvas.zoom * 100)}%`;
+  ui.count.textContent = String(canvas.getAllTerminals().length);
 }
 
 /**
- * No modo maximizado o cabeçalho não desce mais por hover. Ele é aberto pelo
- * botão ☰ da barra de abas (primeiro item) e, enquanto aberto, o terminal é
- * empurrado para baixo para não cobrir as abas.
+ * O modo maximizado ocupa todo o viewport com zoom 100%; ao restaurar, cada
+ * área volta ao zoom que tinha no modo normal.
  */
 function syncMaximizedView(): void {
   const maximized = canvas
@@ -1845,25 +2278,30 @@ function syncMaximizedView(): void {
 
   if (changed) {
     document.body.classList.toggle("terminal-maximized", maximized);
-    toolbarForcedOpen = false;
-    document.getElementById("toolbar")?.classList.remove("visible");
-    closeAllMenus();
+    closeAppMenu();
+
+    if (maximized) {
+      // Guarda o zoom normal antes de exibir o terminal maximizado em 100%.
+      if (activeWorkspace && canvas.zoom !== 1) {
+        activeWorkspace.view.zoom = canvas.zoom;
+      }
+      canvas.zoomLocked = true;
+      canvas.setView(canvas.panX, canvas.panY, 1, false);
+    } else {
+      canvas.zoomLocked = false;
+      canvas.setView(
+        canvas.panX,
+        canvas.panY,
+        activeWorkspace?.view.zoom ?? 1,
+        false,
+      );
+    }
   }
 
-  if (updateMaximizedInset() || changed) {
-    refreshMaximizedGeometry();
-  }
-}
-
-/** Atualiza o inset do topo conforme o cabeçalho está aberto e há maximizado. */
-function updateMaximizedInset(): boolean {
-  const bar = document.getElementById("toolbar");
-  const maximized = document.body.classList.contains("terminal-maximized");
-  const headerOpen = !!bar?.classList.contains("visible");
-  const inset = maximized && headerOpen ? HEADER_HEIGHT : 0;
-  if (canvas.topInset === inset) return false;
-  canvas.topInset = inset;
-  return true;
+  // Maximizado: painel sempre recolhido. Ao restaurar, volta à preferência
+  // do usuário (recolhido ou expandido).
+  const railChanged = applyRailState();
+  if (changed || railChanged) refreshMaximizedGeometry();
 }
 
 /** Re-renderiza o canvas e reajusta o xterm após mudanças de geometria. */
@@ -1876,31 +2314,31 @@ function refreshMaximizedGeometry(): void {
   });
 }
 
-/** Botão ☰ das abas maximizadas: abre/fecha o cabeçalho do app. */
+/** Botão ☰ das abas maximizadas: abre/fecha o menu do aplicativo. */
 function toggleMaximizedAppMenu(): void {
   if (!document.body.classList.contains("terminal-maximized")) return;
-  const bar = document.getElementById("toolbar");
-  if (!bar) return;
-
-  toolbarForcedOpen = !toolbarForcedOpen;
-  bar.classList.toggle("visible", toolbarForcedOpen);
-  if (!toolbarForcedOpen) closeAllMenus();
-  if (updateMaximizedInset()) refreshMaximizedGeometry();
+  toggleAppMenu();
 }
 
 function trackMouseCoordinates(): void {
   canvas.viewport.addEventListener("mousemove", (e) => {
     const p = canvas.screenToWorld(e.clientX, e.clientY);
-    toolbar.coords.textContent = `${Math.round(p.x)}, ${Math.round(p.y)}`;
+    ui.coords.textContent = `${Math.round(p.x)}, ${Math.round(p.y)}`;
   });
 }
 
 function persist(): void {
   if (!activeWorkspace) return;
+  // No modo maximizado o zoom exibido é 100%, mas o zoom normal da área deve
+  // ser preservado para quando ela for restaurada.
+  const keepZoom =
+    canvas.zoomLocked ||
+    workspaceIsMaximized(activeWorkspace) ||
+    document.body.classList.contains("terminal-maximized");
   activeWorkspace.view = {
     panX: canvas.panX,
     panY: canvas.panY,
-    zoom: canvas.zoom,
+    zoom: keepZoom ? activeWorkspace.view.zoom : canvas.zoom,
   };
 
   saveWorkspaces({
@@ -1919,6 +2357,10 @@ function persist(): void {
         name: workspace.name,
         view: workspace.view,
         focusedIndex,
+        color: workspace.color,
+        icon: workspace.icon,
+        folder: workspace.folder || undefined,
+        image: workspace.image || undefined,
         terminals: workspace.initialized
           ? workspace.terminals.map((terminal) => toSavedTerminal(terminal.getState()))
           : workspace.pending,
@@ -1977,7 +2419,21 @@ async function showEmptyContextMenu(point: { x: number; y: number }): Promise<vo
     { label: "Colar terminal", action: () => addTerminal(selectedShell(), point.x, point.y, DEFAULT_W, DEFAULT_H), disabled: !hasClipboard },
   ];
 
-  renderContextMenu(items, point.x * canvas.zoom + canvas.panX, point.y * canvas.zoom + canvas.panY);
+  const screen = canvas.worldToScreen(point.x, point.y);
+  renderContextMenu(items, screen.x, screen.y);
+}
+
+/**
+ * Sugestão inicial para o seletor de pasta do painel do Git: a pasta da área,
+ * o cwd do terminal em foco/primeiro terminal ou a pasta padrão do app.
+ * Depois da primeira escolha, o painel usa sempre a pasta persistida.
+ */
+async function suggestGitFolder(): Promise<string> {
+  if (activeWorkspace?.folder) return activeWorkspace.folder;
+  const cwd =
+    focusedTerminal?.cwd || canvas.getAllTerminals()[0]?.cwd || "";
+  if (cwd) return cwd;
+  return defaultCwd().catch(() => "");
 }
 
 function showTitlebarContextMenu(x: number, y: number, terminal: TerminalWindow): void {
@@ -2010,7 +2466,10 @@ function renderContextMenu(items: Array<{ label: string; action: () => void; dis
     }
     contextMenu.appendChild(el);
   }
-  contextMenu.style.left = `${Math.min(x, window.innerWidth - 160)}px`;
+  contextMenu.style.left = `${Math.max(
+    (document.getElementById("workspace-rail")?.getBoundingClientRect().right ?? 0) + 6,
+    Math.min(x, window.innerWidth - 160),
+  )}px`;
   contextMenu.style.top = `${Math.min(y, window.innerHeight - 120)}px`;
   contextMenu.classList.remove("hidden");
 }

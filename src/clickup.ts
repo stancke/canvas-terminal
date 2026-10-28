@@ -301,12 +301,10 @@ export class ClickUpPlugin {
   private readonly panel: HTMLElement;
   private readonly handle: HTMLElement;
   private readonly body: HTMLElement;
+  private readonly detail: HTMLElement;
   private readonly subtitle: HTMLElement;
   private readonly configButton: HTMLButtonElement | null;
   private readonly refreshButton: HTMLButtonElement | null;
-  private readonly modal: HTMLElement;
-  private readonly modalTitle: HTMLElement;
-  private readonly modalBody: HTMLElement;
 
   private modalTaskId = "";
 
@@ -333,15 +331,13 @@ export class ClickUpPlugin {
   private formError: string | null = null;
 
   constructor() {
-    this.panel = document.getElementById("clickup-widget")!;
+    this.panel = document.getElementById("clickup-modal")!;
     this.handle = document.getElementById("clickup-hotzone")!;
     this.body = document.getElementById("clickup-body")!;
+    this.detail = document.getElementById("clickup-detail")!;
     this.subtitle = document.getElementById("clickup-subtitle")!;
     this.configButton = document.getElementById("clickup-config") as HTMLButtonElement | null;
     this.refreshButton = document.getElementById("clickup-refresh") as HTMLButtonElement | null;
-    this.modal = document.getElementById("clickup-modal")!;
-    this.modalTitle = document.getElementById("clickup-modal-title")!;
-    this.modalBody = document.getElementById("clickup-modal-body")!;
 
     this.settings = loadSettings();
 
@@ -362,15 +358,15 @@ export class ClickUpPlugin {
       if (this.view === "tasks") void this.loadTasks(true);
       else void this.loadSelectionData();
     });
-    document.getElementById("clickup-modal-close")?.addEventListener("click", () => this.closeModal());
-    this.modal.addEventListener("mousedown", (event) => {
-      if (event.target === this.modal) this.closeModal();
+    document.getElementById("clickup-modal-close")?.addEventListener("click", () => this.hide());
+    this.panel.addEventListener("mousedown", (event) => {
+      if (event.target === this.panel) this.hide();
     });
     document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && !this.modal.classList.contains("hidden")) {
+      if (event.key === "Escape" && !this.panel.classList.contains("hidden")) {
         event.preventDefault();
         event.stopPropagation();
-        this.closeModal();
+        this.hide();
       }
     });
     // Só um painel lateral de plugin fica aberto por vez.
@@ -386,7 +382,6 @@ export class ClickUpPlugin {
 
     if (!enabled) {
       this.hide();
-      this.closeModal();
       return;
     }
 
@@ -400,26 +395,27 @@ export class ClickUpPlugin {
   private show(): void {
     if (!this.enabled) return;
     document.dispatchEvent(new CustomEvent("plugin-panel-opened", { detail: "clickup" }));
-    this.panel.classList.add("visible");
+    this.panel.classList.remove("hidden");
     if (this.view === "tasks" && Date.now() - this.tasksAt > TASKS_TTL_MS) {
       void this.loadTasks();
     }
   }
 
   private hide(): void {
-    this.panel.classList.remove("visible");
+    this.panel.classList.add("hidden");
   }
 
   private toggle(): void {
     if (!this.enabled) return;
-    if (this.panel.classList.contains("visible")) this.hide();
-    else this.show();
+    if (this.panel.classList.contains("hidden")) this.show();
+    else this.hide();
   }
 
   /* ---- Roteamento de telas ---- */
 
   private render(): void {
     this.body.innerHTML = "";
+    this.renderDetailPlaceholder();
     this.subtitle.textContent = this.settings.listName;
     this.configButton?.classList.toggle("hidden", !this.settings.token);
 
@@ -435,6 +431,24 @@ export class ClickUpPlugin {
     }
     this.view = "tasks";
     this.renderTasks();
+  }
+
+
+  /** Placeholder da coluna de detalhes (nenhuma tarefa selecionada). */
+  private renderDetailPlaceholder(): void {
+    this.detail.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "clickup-detail-empty";
+    const strong = document.createElement("strong");
+    strong.textContent = this.settings.token
+      ? "Selecione uma tarefa"
+      : "Configure o ClickUp";
+    const hint = document.createElement("span");
+    hint.textContent = this.settings.token
+      ? "Clique em uma tarefa à esquerda para ver os detalhes."
+      : "Cole o token no painel à esquerda para começar.";
+    empty.append(strong, hint);
+    this.detail.appendChild(empty);
   }
 
   /* ---- Token ---- */
@@ -1048,10 +1062,9 @@ export class ClickUpPlugin {
 
   private async openTask(taskId: string): Promise<void> {
     this.modalTaskId = taskId;
-    this.modalTitle.textContent = "Tarefa";
-    this.modalBody.innerHTML = "";
-    this.modalBody.appendChild(this.message("Carregando tarefa…", "clickup-hint"));
-    this.modal.classList.remove("hidden");
+    this.detail.innerHTML = "";
+    this.detail.scrollTop = 0;
+    this.detail.appendChild(this.message("Carregando tarefa…", "clickup-hint"));
 
     try {
       const [detailResult, commentsResult] = await Promise.allSettled([
@@ -1070,8 +1083,8 @@ export class ClickUpPlugin {
       this.renderDetail(detailResult.value, comments, commentsError);
     } catch (failure) {
       if (this.modalTaskId !== taskId) return;
-      this.modalBody.innerHTML = "";
-      this.modalBody.appendChild(this.message(errorMessage(failure), "usage-error"));
+      this.detail.innerHTML = "";
+      this.detail.appendChild(this.message(errorMessage(failure), "usage-error"));
     }
   }
 
@@ -1080,8 +1093,8 @@ export class ClickUpPlugin {
     comments: TaskComment[] = [],
     commentsError: string | null = null,
   ): void {
-    this.modalTitle.textContent = `#${taskLabel(task)}`;
-    this.modalBody.innerHTML = "";
+    this.detail.innerHTML = "";
+    this.detail.scrollTop = 0;
 
     const heading = document.createElement("h3");
     heading.className = "clickup-modal-name";
@@ -1115,12 +1128,12 @@ export class ClickUpPlugin {
     if (task.dueDate) meta.appendChild(metaItem(`entrega ${formatDate(task.dueDate)}`));
     for (const tag of task.tags) meta.appendChild(metaItem(`#${tag}`, "clickup-tag"));
 
-    this.modalBody.append(heading, codeRow, meta);
+    this.detail.append(heading, codeRow, meta);
 
     const description = document.createElement("div");
     description.className = "clickup-description";
     description.textContent = task.description?.trim() ? task.description : "Sem descrição.";
-    this.modalBody.appendChild(description);
+    this.detail.appendChild(description);
 
     const images: Array<{ url: string; title: string }> = [];
     for (const attachment of task.attachments) {
@@ -1152,7 +1165,7 @@ export class ClickUpPlugin {
         button.addEventListener("click", () => void openExternal(image.url));
         gallery.appendChild(button);
       }
-      this.modalBody.appendChild(gallery);
+      this.detail.appendChild(gallery);
     }
 
     const files = task.attachments.filter(
@@ -1169,10 +1182,10 @@ export class ClickUpPlugin {
         link.addEventListener("click", () => void openExternal(file.url));
         fileList.appendChild(link);
       }
-      this.modalBody.appendChild(fileList);
+      this.detail.appendChild(fileList);
     }
 
-    this.modalBody.appendChild(this.renderComments(comments, commentsError));
+    this.detail.appendChild(this.renderComments(comments, commentsError));
 
     if (task.url) {
       const open = document.createElement("button");
@@ -1180,7 +1193,7 @@ export class ClickUpPlugin {
       open.className = "clickup-primary clickup-open";
       open.textContent = "Abrir no ClickUp";
       open.addEventListener("click", () => void openExternal(task.url));
-      this.modalBody.appendChild(open);
+      this.detail.appendChild(open);
     }
   }
 
@@ -1241,12 +1254,6 @@ export class ClickUpPlugin {
     }
     section.appendChild(list);
     return section;
-  }
-
-  private closeModal(): void {
-    this.modalTaskId = "";
-    this.modal.classList.add("hidden");
-    this.modalBody.innerHTML = "";
   }
 
   private async copyCode(code: string, button: HTMLButtonElement): Promise<void> {

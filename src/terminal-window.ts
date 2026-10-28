@@ -11,6 +11,7 @@ import {
 } from "./pty";
 import { Canvas } from "./canvas";
 import { onThemeChange, terminalPalette } from "./theme";
+import { snapMovingRect, snapResizingRect, type SnapRect } from "./snapping";
 
 export interface TerminalState {
   id: number;
@@ -479,11 +480,10 @@ export class TerminalWindow {
     // Uma janela maximizada acompanha o viewport também quando o zoom muda.
     if (this.maximized) {
       const rect = this.canvas.worldRectVisible();
-      const inset = this.canvas.topInset / zoom;
       this.x = rect.x;
-      this.y = rect.y + inset;
+      this.y = rect.y;
       this.w = rect.w;
-      this.h = Math.max(80, rect.h - inset);
+      this.h = Math.max(80, rect.h);
     }
     this.element.style.left = `${this.x * zoom}px`;
     this.element.style.top = `${this.y * zoom}px`;
@@ -960,6 +960,7 @@ export class TerminalWindow {
       origX = this.x;
       origY = this.y;
       this.focus();
+      this.canvas.snapGuides.clear();
       e.preventDefault();
     });
 
@@ -969,9 +970,21 @@ export class TerminalWindow {
         if (!dragging || this.disposed) return;
         const dx = (e.clientX - startX) / this.canvas.zoom;
         const dy = (e.clientY - startY) / this.canvas.zoom;
-        this.x = origX + dx;
-        this.y = origY + dy;
+        const snapped = snapMovingRect(
+          { x: origX + dx, y: origY + dy, w: this.w, h: this.h },
+          this.snapTargets(),
+          this.canvas.zoom,
+        );
+        this.x = snapped.x;
+        this.y = snapped.y;
         this.render(this.canvas.zoom);
+        this.canvas.snapGuides.show(
+          snapped.vertical,
+          snapped.horizontal,
+          this.canvas.zoom,
+          this.canvas.panX,
+          this.canvas.panY,
+        );
         this.onChange?.();
       },
       { signal: this.listeners.signal },
@@ -980,10 +993,30 @@ export class TerminalWindow {
     window.addEventListener(
       "mouseup",
       () => {
+        if (!dragging) return;
         dragging = false;
+        this.canvas.snapGuides.clear();
       },
       { signal: this.listeners.signal },
     );
+  }
+
+  /** Retângulos dos outros terminais visíveis usados como guias de encaixe. */
+  private snapTargets(): SnapRect[] {
+    return this.canvas
+      .getAllTerminals()
+      .filter(
+        (terminal) =>
+          terminal !== this &&
+          !terminal.maximized &&
+          !terminal.element.classList.contains("minimized"),
+      )
+      .map((terminal) => ({
+        x: terminal.x,
+        y: terminal.y,
+        w: terminal.w,
+        h: terminal.h,
+      }));
   }
 
   private setupResize(): void {
@@ -1007,6 +1040,7 @@ export class TerminalWindow {
       origY = this.y;
       origW = this.w;
       origH = this.h;
+      this.canvas.snapGuides.clear();
       e.preventDefault();
       e.stopPropagation();
     });
@@ -1039,11 +1073,27 @@ export class TerminalWindow {
         if (handle.includes("w")) newX = origX + (origW - newW);
         if (handle.includes("n")) newY = origY + (origH - newH);
 
-        this.x = newX;
-        this.y = newY;
-        this.w = newW;
-        this.h = newH;
+        const snapped = snapResizingRect(
+          { x: newX, y: newY, w: newW, h: newH },
+          this.snapTargets(),
+          this.canvas.zoom,
+          handle,
+          MIN_W,
+          MIN_H,
+        );
+
+        this.x = snapped.x;
+        this.y = snapped.y;
+        this.w = snapped.w;
+        this.h = snapped.h;
         this.render(this.canvas.zoom);
+        this.canvas.snapGuides.show(
+          snapped.vertical,
+          snapped.horizontal,
+          this.canvas.zoom,
+          this.canvas.panX,
+          this.canvas.panY,
+        );
         this.throttledFit();
         this.onChange?.();
       },
@@ -1053,8 +1103,10 @@ export class TerminalWindow {
     window.addEventListener(
       "mouseup",
       () => {
+        if (!resizing) return;
         resizing = false;
         handle = "";
+        this.canvas.snapGuides.clear();
         this.scheduleFit();
       },
       { signal: this.listeners.signal },
