@@ -293,9 +293,9 @@ export class TokenUsageWidget {
     amount.className = "usage-amount";
     amount.textContent = usage.total > 0 ? formatTokens(usage.total) : "—";
     amount.title = [
-      `${formatExact(usage.total)} tokens`,
+      `${formatExact(usage.total)} tokens novos (entrada + saída + cache escrito)`,
       `entrada ${formatExact(usage.input)} · saída ${formatExact(usage.output)}`,
-      `cache lido ${formatExact(usage.cacheRead)} · cache escrito ${formatExact(usage.cacheWrite)}`,
+      `cache escrito ${formatExact(usage.cacheWrite)} · cache lido ${formatExact(usage.cacheRead)}`,
       `${formatExact(usage.messages)} mensagens`,
     ].join("\n");
 
@@ -303,11 +303,15 @@ export class TokenUsageWidget {
     wrapper.appendChild(row);
     wrapper.appendChild(this.renderBar(usage));
 
+    const parts: string[] = [];
     const reset = formatReset(usage.resetsAt, now);
-    if (reset) {
+    if (reset) parts.push(reset);
+    // O cache lido infla o volume bruto; fica visível, mas fora do total.
+    if (usage.cacheRead > 0) parts.push(`cache lido ${formatTokens(usage.cacheRead)}`);
+    if (parts.length > 0) {
       const foot = document.createElement("div");
       foot.className = "usage-window-foot";
-      foot.textContent = reset;
+      foot.textContent = parts.join(" · ");
       wrapper.appendChild(foot);
     }
     return wrapper;
@@ -317,10 +321,12 @@ export class TokenUsageWidget {
     const bar = document.createElement("div");
     bar.className = "usage-bar";
 
+    // Mesma composição do total: entrada, saída, cache escrito e raciocínio.
     const segments: Array<[number, string, string]> = [
       [usage.input, "usage-seg-input", "entrada"],
       [usage.output, "usage-seg-output", "saída"],
-      [usage.cacheRead + usage.cacheWrite, "usage-seg-cache", "cache"],
+      [usage.cacheWrite, "usage-seg-cache", "cache escrito"],
+      [usage.reasoning, "usage-seg-output", "raciocínio"],
     ];
 
     for (const [value, className, label] of segments) {

@@ -37,12 +37,22 @@ struct Tokens {
 }
 
 impl Tokens {
+    /// Tokens "novos" — tudo menos o cache lido.
+    ///
+    /// O `cache_read` é a releitura do mesmo contexto a cada turno: ele domina
+    /// o volume bruto (costuma passar de 95% do total) e não acompanha o
+    /// consumo real da janela. Somá-lo ao total fazia o painel crescer muito
+    /// mais rápido que o medidor oficial de limites.
     fn total(&self) -> u64 {
-        self.input + self.output + self.cache_read + self.cache_write + self.reasoning
+        self.input + self.output + self.cache_write + self.reasoning
+    }
+
+    fn processed(&self) -> u64 {
+        self.total() + self.cache_read
     }
 
     fn is_empty(&self) -> bool {
-        self.total() == 0
+        self.processed() == 0
     }
 }
 
@@ -69,7 +79,8 @@ fn cache() -> &'static Mutex<FileCache> {
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowUsage {
-    /// Soma de entrada, saída, cache e raciocínio.
+    /// Soma dos tokens novos: entrada, saída, cache escrito e raciocínio.
+    /// O cache lido fica de fora (vai em [`WindowUsage::cache_read`]).
     pub total: u64,
     pub input: u64,
     pub output: u64,
@@ -155,7 +166,11 @@ fn collect_claude(now: i64) -> AgentUsage {
     entries.retain(|entry| entry.at <= now + FUTURE_TOLERANCE_MS);
     entries.sort_by_key(|entry| entry.at);
 
-    let (five_hours, week, last_activity) = summarize(&entries, now);
+    let unique = unique_entries(&entries, now);
+    let session = session_window(&unique, now);
+    let week = weekly_window(now, claude_weekly_reset());
+
+    let (five_hours, week, last_activity) = summarize(&unique, now, session, week);
 
     AgentUsage {
         id: "claude".into(),
@@ -179,6 +194,41 @@ fn claude_project_dirs() -> Vec<PathBuf> {
         dirs.push(home.join(".claude").join("projects"));
     }
     dedupe_existing(dirs)
+}
+
+/// `~/.claude.json` guarda a última utilização conhecida das janelas oficiais.
+///
+/// Só usamos o horário de reset semanal: ele é fixo por conta e continua
+/// válido mesmo quando o cache está velho (basta rolar em passos de 7 dias).
+fn claude_config_files() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Some(config) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        files.push(PathBuf::from(config).join(".claude.json"));
+    }
+    if let Some(home) = home_dir() {
+        files.push(home.join(".claude.json"));
+    }
+    files.retain(|path| path.is_file());
+    files
+}
+
+fn claude_weekly_reset() -> Option<i64> {
+    for path in claude_config_files() {
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&content) else {
+            continue;
+        };
+        let reset = value
+            .pointer("/cachedUsageUtilization/utilization/seven_day/resets_at")
+            .and_then(Value::as_str)
+            .and_then(parse_rfc3339_ms);
+        if reset.is_some() {
+            return reset;
+        }
+    }
+    None
 }
 
 /// Cada linha do `.jsonl` é um evento; só interessam as respostas do modelo.
@@ -250,7 +300,12 @@ fn collect_opencode(now: i64) -> AgentUsage {
     entries.retain(|entry| entry.at <= now + FUTURE_TOLERANCE_MS);
     entries.sort_by_key(|entry| entry.at);
 
-    let (five_hours, week, last_activity) = summarize(&entries, now);
+    let unique = unique_entries(&entries, now);
+    // O OpenCode não expõe janelas oficiais: mantém o recorte móvel.
+    let session = rolling_window(now, FIVE_HOURS_MS);
+    let week = rolling_window(now, WEEK_MS);
+
+    let (five_hours, week, last_activity) = summarize(&unique, now, session, week);
 
     AgentUsage {
         id: "opencode".into(),
@@ -452,8 +507,35 @@ fn non_negative(value: Option<i64>) -> u64 {
 
 /* ---- Agregação ---- */
 
-/// Totais por janela (5 h e 7 dias) e timestamp da última atividade.
-fn summarize(entries: &[Entry], now: i64) -> (WindowUsage, WindowUsage, Option<i64>) {
+/// Intervalo de apuração de uma janela.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Span {
+    start: i64,
+    /// `None` para janela móvel (o reset é calculado pela mensagem mais antiga).
+    end: Option<i64>,
+    length: i64,
+}
+
+impl Span {
+    fn rolling(now: i64, length: i64) -> Self {
+        Self {
+            start: now - length,
+            end: None,
+            length,
+        }
+    }
+
+    fn fixed(start: i64, end: i64, length: i64) -> Self {
+        Self {
+            start,
+            end: Some(end),
+            length,
+        }
+    }
+}
+
+/// Remove mensagens repetidas (sessões retomadas) e o que já saiu da semana.
+fn unique_entries<'a>(entries: &'a [Entry], now: i64) -> Vec<&'a Entry> {
     let mut seen: HashSet<&str> = HashSet::new();
     let mut unique: Vec<&Entry> = Vec::with_capacity(entries.len());
 
@@ -468,29 +550,95 @@ fn summarize(entries: &[Entry], now: i64) -> (WindowUsage, WindowUsage, Option<i
         }
         unique.push(entry);
     }
-
-    let five_hours = window_usage(&unique, now, FIVE_HOURS_MS);
-    let week = window_usage(&unique, now, WEEK_MS);
-    let last_activity = unique.iter().map(|entry| entry.at).max();
-
-    (five_hours, week, last_activity)
+    unique
 }
 
-fn window_usage(entries: &[&Entry], now: i64, span: i64) -> WindowUsage {
+/// Janela de sessão do Claude Code: bloco fixo de 5 h que começa na primeira
+/// mensagem depois do bloco anterior. É assim que o servidor conta a janela —
+/// um recorte móvel de 5 h nunca bate com o reset mostrado no `/usage`.
+fn session_window(entries: &[&Entry], now: i64) -> Span {
+    let mut block_start: Option<i64> = None;
+
+    for entry in entries {
+        if entry.at > now {
+            break;
+        }
+        match block_start {
+            None => block_start = Some(entry.at),
+            Some(start) if entry.at >= start + FIVE_HOURS_MS => block_start = Some(entry.at),
+            _ => {}
+        }
+    }
+
+    match block_start {
+        Some(start) if now < start + FIVE_HOURS_MS => {
+            Span::fixed(start, start + FIVE_HOURS_MS, FIVE_HOURS_MS)
+        }
+        // Sem sessão em andamento: a janela de 5 h está zerada.
+        _ => Span::rolling(now, FIVE_HOURS_MS),
+    }
+}
+
+/// Janela semanal oficial. O reset é fixo por conta; quando o horário é
+/// conhecido (cache do `~/.claude.json`), rolamos em passos de 7 dias até
+/// envolver o instante atual. Sem ele, cai no recorte móvel de 7 dias.
+fn weekly_window(now: i64, official_reset: Option<i64>) -> Span {
+    if let Some(mut end) = official_reset {
+        while end <= now {
+            end += WEEK_MS;
+        }
+        while end - WEEK_MS > now {
+            end -= WEEK_MS;
+        }
+        if end - WEEK_MS <= now && now < end {
+            return Span::fixed(end - WEEK_MS, end, WEEK_MS);
+        }
+    }
+    Span::rolling(now, WEEK_MS)
+}
+
+fn rolling_window(now: i64, length: i64) -> Span {
+    Span::rolling(now, length)
+}
+
+/// Totais por janela (5 h e semana) e timestamp da última atividade.
+fn summarize(
+    entries: &[&Entry],
+    now: i64,
+    session: Span,
+    week: Span,
+) -> (WindowUsage, WindowUsage, Option<i64>) {
+    let five_hours = window_usage(entries, &session);
+    let week_usage = window_usage(entries, &week);
+    let last_activity = entries
+        .iter()
+        .map(|entry| entry.at)
+        .filter(|at| *at <= now + FUTURE_TOLERANCE_MS)
+        .max();
+
+    (five_hours, week_usage, last_activity)
+}
+
+fn window_usage(entries: &[&Entry], span: &Span) -> WindowUsage {
     let mut usage = WindowUsage::default();
     let mut oldest = i64::MAX;
 
     for entry in entries {
-        if entry.at < now - span {
+        if entry.at < span.start {
+            continue;
+        }
+        if span.end.is_some_and(|end| entry.at >= end) {
             continue;
         }
         usage.add(&entry.tokens);
         oldest = oldest.min(entry.at);
     }
 
-    if usage.messages > 0 && oldest != i64::MAX {
-        // A janela só fica totalmente livre quando a mensagem mais antiga sai.
-        usage.resets_at = Some(oldest + span);
+    if usage.messages > 0 {
+        usage.resets_at = span
+            .end
+            // Janela móvel: só fica livre quando a mensagem mais antiga sai.
+            .or_else(|| (oldest != i64::MAX).then(|| oldest + span.length));
     }
     usage
 }
@@ -667,7 +815,9 @@ mod tests {
         assert_eq!(entry.tokens.output, 30);
         assert_eq!(entry.tokens.cache_write, 40);
         assert_eq!(entry.tokens.cache_read, 50);
-        assert_eq!(entry.tokens.total(), 240);
+        // O cache lido não entra no total "novo", mas continua sendo processado.
+        assert_eq!(entry.tokens.total(), 190);
+        assert_eq!(entry.tokens.processed(), 240);
         assert_eq!(entry.id.as_deref(), Some("claude:msg_1"));
     }
 
@@ -694,7 +844,8 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry.at, 1_771_099_301_577);
-        assert_eq!(entry.tokens.total(), 15_332);
+        assert_eq!(entry.tokens.total(), 1_366);
+        assert_eq!(entry.tokens.processed(), 15_332);
         assert_eq!(entry.id.as_deref(), Some("opencode:msg_2"));
     }
 
@@ -731,12 +882,90 @@ mod tests {
             },
         ];
 
-        let (five_hours, week, last) = summarize(&entries, now);
+        let unique = unique_entries(&entries, now);
+        let (five_hours, week, last) = summarize(
+            &unique,
+            now,
+            session_window(&unique, now),
+            rolling_window(now, WEEK_MS),
+        );
         assert_eq!(five_hours.total, 150);
         assert_eq!(five_hours.messages, 1);
         assert_eq!(week.total, 160);
         assert_eq!(week.messages, 2);
         assert_eq!(last, Some(now - 60 * 60 * 1000));
+    }
+
+    #[test]
+    fn sessao_de_cinco_horas_comeca_na_primeira_mensagem_do_bloco() {
+        let now = 1_000_000_000_000;
+        let tokens = Tokens {
+            input: 10,
+            ..Tokens::default()
+        };
+        let first = Entry {
+            at: now - 9 * 60 * 60 * 1000,
+            tokens: tokens.clone(),
+            id: Some("a".into()),
+        };
+        let start = Entry {
+            at: now - 4 * 60 * 60 * 1000,
+            tokens: tokens.clone(),
+            id: Some("b".into()),
+        };
+        let same_block = Entry {
+            at: now - 3 * 60 * 60 * 1000,
+            tokens,
+            id: Some("c".into()),
+        };
+
+        let entries = vec![first, start.clone(), same_block];
+        let refs: Vec<&Entry> = entries.iter().collect();
+        let span = session_window(&refs, now);
+        assert_eq!(span.start, start.at);
+        assert_eq!(span.end, Some(start.at + FIVE_HOURS_MS));
+
+        let five_hours = window_usage(&refs, &span);
+        assert_eq!(five_hours.messages, 2);
+        assert_eq!(five_hours.total, 20);
+        assert_eq!(five_hours.resets_at, Some(start.at + FIVE_HOURS_MS));
+    }
+
+    #[test]
+    fn sessao_encerrada_deixa_a_janela_de_cinco_horas_zerada() {
+        let now = 1_000_000_000_000;
+        let entry = Entry {
+            at: now - 7 * 60 * 60 * 1000,
+            tokens: Tokens {
+                input: 10,
+                ..Tokens::default()
+            },
+            id: None,
+        };
+        let refs = vec![&entry];
+        let five_hours = window_usage(&refs, &session_window(&refs, now));
+        assert_eq!(five_hours.total, 0);
+        assert_eq!(five_hours.resets_at, None);
+    }
+
+    #[test]
+    fn semana_usa_o_reset_oficial_rolado_em_passos_de_sete_dias() {
+        let now = 1_000_000_000_000;
+        let reset = now + 2 * 24 * 60 * 60 * 1000;
+        let span = weekly_window(now, Some(reset));
+        assert_eq!(span.end, Some(reset));
+        assert_eq!(span.start, reset - WEEK_MS);
+
+        // Cache de dias atrás: a âncora continua válida rolando para frente.
+        let old_reset = now - 2 * 24 * 60 * 60 * 1000;
+        let span = weekly_window(now, Some(old_reset));
+        assert_eq!(span.end, Some(old_reset + WEEK_MS));
+        assert_eq!(span.start, old_reset + WEEK_MS - WEEK_MS);
+
+        // Sem horário oficial, cai no recorte móvel.
+        let span = weekly_window(now, None);
+        assert_eq!(span.end, None);
+        assert_eq!(span.start, now - WEEK_MS);
     }
 
     #[test]
@@ -764,7 +993,8 @@ mod tests {
 
         let entries = query_usage(&conn, SQL_SESSION_MESSAGE, 0).expect("consulta");
         assert_eq!(entries.len(), 1, "só mensagens com tokens contam");
-        assert_eq!(entries[0].tokens.total(), 118);
+        assert_eq!(entries[0].tokens.total(), 18);
+        assert_eq!(entries[0].tokens.processed(), 118);
         assert_eq!(entries[0].tokens.cache_read, 100);
         assert_eq!(entries[0].id.as_deref(), Some("opencode:msg_1"));
     }
@@ -793,7 +1023,14 @@ mod tests {
             },
             id: Some("claude:msg_repetida".into()),
         };
-        let (five_hours, _, _) = summarize(&[entry.clone(), entry], now);
+        let entries = vec![entry.clone(), entry];
+        let unique = unique_entries(&entries, now);
+        let (five_hours, _, _) = summarize(
+            &unique,
+            now,
+            session_window(&unique, now),
+            rolling_window(now, WEEK_MS),
+        );
         assert_eq!(five_hours.total, 15);
         assert_eq!(five_hours.messages, 1);
     }
