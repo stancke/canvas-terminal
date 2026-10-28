@@ -39,9 +39,18 @@ import {
   type PluginDefinition,
   type PluginSettings,
 } from "./plugins";
-import { TokenUsageWidget } from "./token-usage";
+import { TokenUsageModal } from "./token-usage";
 import { ClickUpPlugin } from "./clickup";
-import { initTheme, onThemeChange, themeLabel, toggleTheme } from "./theme";
+import {
+  applyTheme,
+  currentTheme,
+  getTheme,
+  initTheme,
+  onThemeChange,
+  THEME_GROUPS,
+  type ThemeName,
+} from "./theme";
+import { autostartAvailable, isAutostartEnabled, setAutostart } from "./autostart";
 import {
   DEFAULT_WORKSPACE_COLOR,
   DEFAULT_WORKSPACE_ICON,
@@ -58,6 +67,7 @@ const DEFAULT_H = 420;
 const WORKSPACE_IMAGE_SIZE = 96;
 const WORKSPACE_IMAGE_MAX = 380_000;
 const RAIL_COLLAPSED_KEY = "canvas-terminal.rail-collapsed.v1";
+const SHELL_KEY = "canvas-terminal.shell.v1";
 
 interface Workspace {
   id: string;
@@ -86,7 +96,7 @@ let focusedTerminal: TerminalWindow | null = null;
 let zCounter = 10;
 let quickCommands: QuickCommand[] = [];
 let pluginSettings: PluginSettings = { enabled: {} };
-let tokenUsageWidget: TokenUsageWidget | null = null;
+let tokenUsageModal: TokenUsageModal | null = null;
 let clickUpPlugin: ClickUpPlugin | null = null;
 let gitPanel: GitPanel | null = null;
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
@@ -99,10 +109,10 @@ let railUserCollapsed = false;
 let tabGroupOrder: string[] = [];
 
 const ui = {
-  shellSelect: document.querySelector<HTMLSelectElement>("#shell-select")!,
   fullscreenBtn: document.querySelector<HTMLButtonElement>("#btn-fullscreen")!,
   zoom: document.querySelector<HTMLSpanElement>("#zoom-indicator")!,
   count: document.querySelector<HTMLSpanElement>("#terminal-count")!,
+  countLabel: document.querySelector<HTMLSpanElement>("#terminal-count-label")!,
   coords: document.querySelector<HTMLSpanElement>("#coords")!,
   appMenu: document.querySelector<HTMLElement>("#app-menu")!,
   appMenuButton: document.querySelector<HTMLButtonElement>("#rail-app-menu")!,
@@ -113,9 +123,11 @@ const menuEls = Array.from(document.querySelectorAll<HTMLElement>("#app-menu .me
 const contextMenu = document.querySelector<HTMLDivElement>("#context-menu")!;
 
 async function main(): Promise<void> {
+  if (isTauri()) document.body.classList.add("tauri-env");
   initTheme();
-  syncThemeButton();
-  onThemeChange(() => syncThemeButton());
+  renderThemeMenu();
+  syncThemeUi();
+  onThemeChange(() => syncThemeUi());
 
   await initPtyListener();
   // Uma recarga do webview deixaria os PTYs antigos órfãos: limpa antes de restaurar.
@@ -146,7 +158,7 @@ async function main(): Promise<void> {
   };
 
   shells = await listShells();
-  populateShellSelect();
+  initShellSelection();
 
   bindAppChrome();
   bindWorkspaceRail();
@@ -161,6 +173,8 @@ async function main(): Promise<void> {
     document.getElementById("git-modal")!,
     () => suggestGitFolder(),
   );
+  // Abrir outro modal fecha o Git (e vice-versa pelo botão do Git).
+  document.addEventListener("plugin-panel-opened", () => gitPanel?.close());
 
   await restoreWorkspaces();
   updateStatus();
@@ -171,19 +185,37 @@ async function main(): Promise<void> {
   }
 }
 
-function populateShellSelect(): void {
-  ui.shellSelect.innerHTML = "";
-  for (const shell of shells) {
-    const opt = document.createElement("option");
-    opt.value = shell.id;
-    opt.textContent = shell.name;
-    ui.shellSelect.appendChild(opt);
+/** Shell padrão escolhido em Configurações → Terminal. */
+let selectedShellId = "";
+
+function initShellSelection(): void {
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(SHELL_KEY);
+  } catch {
+    stored = null;
+  }
+  selectedShellId =
+    stored && shells.some((shell) => shell.id === stored)
+      ? stored
+      : (shells[0]?.id ?? "");
+}
+
+function chooseShell(id: string): void {
+  if (!shells.some((shell) => shell.id === id)) return;
+  selectedShellId = id;
+  try {
+    localStorage.setItem(SHELL_KEY, id);
+  } catch {
+    // Ignora quota/escrita bloqueada.
   }
 }
 
 function selectedShell(): string {
-  return ui.shellSelect.value || shells[0]?.id || "";
+  return selectedShellId || shells[0]?.id || "";
 }
+
+
 
 async function addTerminalAtCenter(): Promise<void> {
   if (!activeWorkspace) return;
@@ -330,16 +362,146 @@ async function addTerminalToWorkspace(
   return terminal;
 }
 
-/** O rótulo mostra o tema em uso; o clique alterna. */
-function syncThemeButton(): void {
-  const label = document.querySelector<HTMLElement>("#menu-theme .menu-label");
-  if (label) label.textContent = themeLabel();
+/* ---- Temas (cabeçalho) ---- */
+
+let themeMenu: HTMLElement | null = null;
+
+function themeMenuElement(): HTMLElement | null {
+  themeMenu ??= document.getElementById("theme-menu");
+  return themeMenu;
+}
+
+/** Monta o menu de temas a partir do registro (grupos + "obter mais"). */
+function renderThemeMenu(): void {
+  const menu = themeMenuElement();
+  if (!menu) return;
+  menu.innerHTML = "";
+
+  for (const group of THEME_GROUPS) {
+    const heading = document.createElement("div");
+    heading.className = "theme-menu-group";
+    heading.textContent = group.label;
+    menu.appendChild(heading);
+
+    for (const id of group.themes) {
+      const definition = getTheme(id);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "theme-option";
+      button.dataset.themeId = id;
+      button.setAttribute("role", "menuitemradio");
+      button.setAttribute("aria-checked", "false");
+
+      const swatch = document.createElement("span");
+      swatch.className = "theme-swatch";
+      swatch.style.setProperty("--swatch-bg", definition.preview.background);
+      swatch.style.setProperty("--swatch-surface", definition.preview.surface);
+      swatch.style.setProperty("--swatch-accent", definition.preview.accent);
+
+      const name = document.createElement("span");
+      name.className = "theme-name";
+      name.textContent = definition.name;
+
+      const check = document.createElement("span");
+      check.className = "theme-check";
+      check.textContent = "✓";
+      check.setAttribute("aria-hidden", "true");
+
+      button.append(swatch, name, check);
+      button.addEventListener("click", () => {
+        applyTheme(id);
+        closeThemeMenu();
+      });
+      menu.appendChild(button);
+    }
+  }
+
+  const separator = document.createElement("div");
+  separator.className = "theme-separator";
+  menu.appendChild(separator);
+
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "theme-option";
+  more.setAttribute("role", "menuitem");
+  const moreIcon = document.createElement("span");
+  moreIcon.className = "theme-swatch";
+  moreIcon.style.setProperty("--swatch-bg", "transparent");
+  moreIcon.style.setProperty("--swatch-surface", "var(--bg)");
+  moreIcon.style.setProperty("--swatch-accent", "var(--accent)");
+  moreIcon.textContent = "+";
+  moreIcon.style.display = "flex";
+  moreIcon.style.alignItems = "center";
+  moreIcon.style.justifyContent = "center";
+  moreIcon.style.fontSize = "11px";
+  const moreLabel = document.createElement("span");
+  moreLabel.className = "theme-name";
+  moreLabel.textContent = "Obter mais temas...";
+  more.append(moreIcon, moreLabel);
+  more.addEventListener("click", () => {
+    closeThemeMenu();
+    openSettings("appearance");
+  });
+  menu.appendChild(more);
+}
+
+function syncThemeUi(): void {
+  const menu = themeMenuElement();
+  if (menu) {
+    for (const option of menu.querySelectorAll<HTMLButtonElement>(".theme-option[data-theme-id]")) {
+      const selected = option.dataset.themeId === currentTheme();
+      option.classList.toggle("selected", selected);
+      option.setAttribute("aria-checked", String(selected));
+    }
+  }
+  // A aba Aparência, se estiver aberta, reflete o novo tema na hora.
+  const modal = settingsModal();
+  if (modal && !modal.classList.contains("hidden") && currentSettingsTab === "appearance") {
+    renderSettings();
+  }
+}
+
+function themeMenuOpen(): boolean {
+  const menu = themeMenuElement();
+  return !!menu && !menu.classList.contains("hidden");
+}
+
+function openThemeMenu(): void {
+  const menu = themeMenuElement();
+  const button = document.getElementById("header-theme");
+  if (!menu || !button) return;
+  syncThemeUi();
+  menu.classList.remove("hidden");
+  button.setAttribute("aria-expanded", "true");
+  // Encosta o menu na borda direita do botão, sem sair da janela.
+  const rect = button.getBoundingClientRect();
+  const width = menu.offsetWidth;
+  menu.style.top = `${rect.bottom + 6}px`;
+  menu.style.left = `${Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8))}px`;
+}
+
+function closeThemeMenu(): boolean {
+  const menu = themeMenuElement();
+  const button = document.getElementById("header-theme");
+  if (!menu || menu.classList.contains("hidden")) return false;
+  menu.classList.add("hidden");
+  button?.setAttribute("aria-expanded", "false");
+  return true;
+}
+
+function toggleThemeMenu(): void {
+  if (themeMenuOpen()) closeThemeMenu();
+  else openThemeMenu();
 }
 
 function bindAppChrome(): void {
   bindMenubar();
   bindMenuActions();
   bindDialog();
+  bindThemeMenu();
+  bindSettingsModal();
+  bindWindowChrome();
+  bindHeaderActions();
   ui.fullscreenBtn.addEventListener("click", () => void toggleFullscreen());
   ui.appMenuButton.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -360,6 +522,457 @@ function bindAppChrome(): void {
   });
 
   bindRailState();
+}
+
+/* ---- Cabeçalho: atalhos, tema e controles da janela ---- */
+
+function bindThemeMenu(): void {
+  const button = document.getElementById("header-theme");
+  const menu = themeMenuElement();
+  if (!button || !menu) return;
+
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeAppMenu();
+    toggleThemeMenu();
+  });
+  menu.addEventListener("click", (event) => event.stopPropagation());
+
+  document.addEventListener("click", () => closeThemeMenu());
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && themeMenuOpen()) {
+      event.preventDefault();
+      closeThemeMenu();
+      button.focus();
+    }
+  });
+  window.addEventListener("resize", () => closeThemeMenu());
+}
+
+function bindHeaderActions(): void {
+  document.getElementById("header-zoom")?.addEventListener("click", () => resetZoom());
+  document.getElementById("header-settings")?.addEventListener("click", () => {
+    openSettings("general");
+  });
+}
+
+/** Mesmo tipo local de `@tauri-apps/api/window` (não é exportado pelo pacote). */
+type ResizeDirection =
+  | "East"
+  | "North"
+  | "NorthEast"
+  | "NorthWest"
+  | "South"
+  | "SouthEast"
+  | "SouthWest"
+  | "West";
+
+async function currentWindow() {
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  return getCurrentWindow();
+}
+
+async function toggleWindowMaximize(): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const win = await currentWindow();
+    await win.toggleMaximize();
+    await syncWindowMaximized();
+  } catch (err) {
+    console.error("Falha ao maximizar a janela:", err);
+  }
+}
+
+async function syncWindowMaximized(): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const win = await currentWindow();
+    const maximized = await win.isMaximized();
+    document.body.classList.toggle("window-maximized", maximized);
+    const button = document.getElementById("win-maximize");
+    if (button) {
+      const label = maximized ? "Restaurar" : "Maximizar";
+      button.title = label;
+      button.setAttribute("aria-label", label);
+    }
+  } catch {
+    // Sem permissão/evento: mantém o estado atual.
+  }
+}
+
+function bindWindowChrome(): void {
+  const minimize = document.getElementById("win-minimize");
+  const maximize = document.getElementById("win-maximize");
+  const close = document.getElementById("win-close");
+  const header = document.getElementById("app-header");
+
+  minimize?.addEventListener("click", () => {
+    if (!isTauri()) return;
+    void currentWindow().then((win) => win.minimize());
+  });
+  maximize?.addEventListener("click", () => void toggleWindowMaximize());
+  close?.addEventListener("click", () => {
+    if (!isTauri()) {
+      window.close();
+      return;
+    }
+    void currentWindow().then((win) => win.close());
+  });
+
+  header?.addEventListener("dblclick", (event) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("button, .header-pill")) return;
+    void toggleWindowMaximize();
+  });
+
+  // Bordas invisíveis: substituem o redimensionamento da moldura nativa.
+  for (const handle of document.querySelectorAll<HTMLElement>("[data-resize]")) {
+    handle.addEventListener("pointerdown", (event) => {
+      if (!isTauri()) return;
+      event.preventDefault();
+      const direction = handle.dataset.resize as ResizeDirection | undefined;
+      if (!direction) return;
+      void currentWindow().then((win) => win.startResizeDragging(direction));
+    });
+  }
+
+  void syncWindowMaximized();
+  let resizeTimer: number | null = null;
+  window.addEventListener("resize", () => {
+    if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(() => {
+      resizeTimer = null;
+      void syncWindowMaximized();
+    }, 120);
+  });
+}
+
+/* ---- Configurações ---- */
+
+type SettingsTab =
+  | "general"
+  | "appearance"
+  | "terminal"
+  | "plugins"
+  | "shortcuts"
+  | "about";
+
+const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
+  { id: "general", label: "Geral" },
+  { id: "appearance", label: "Aparência" },
+  { id: "terminal", label: "Terminal" },
+  { id: "plugins", label: "Plugins" },
+  { id: "shortcuts", label: "Atalhos" },
+  { id: "about", label: "Sobre" },
+];
+
+let currentSettingsTab: SettingsTab = "general";
+
+function settingsModal(): HTMLElement | null {
+  return document.getElementById("settings-modal");
+}
+
+function openSettings(tab: SettingsTab = "general"): void {
+  closeAppMenu();
+  closeThemeMenu();
+  hideContextMenu();
+  gitPanel?.close();
+  // Fecha os modais de plugin para a tela de configurações não abrir por cima.
+  document.dispatchEvent(
+    new CustomEvent("plugin-panel-opened", { detail: "settings" }),
+  );
+  currentSettingsTab = tab;
+  syncSettingsTabs();
+  renderSettings();
+  settingsModal()?.classList.remove("hidden");
+}
+
+function closeSettings(): boolean {
+  const modal = settingsModal();
+  if (!modal || modal.classList.contains("hidden")) return false;
+  modal.classList.add("hidden");
+  return true;
+}
+
+function syncSettingsTabs(): void {
+  for (const button of document.querySelectorAll<HTMLButtonElement>(".settings-tab")) {
+    const selected = button.dataset.settingsTab === currentSettingsTab;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+  }
+  const heading = document.getElementById("settings-heading");
+  if (heading) {
+    heading.textContent =
+      SETTINGS_TABS.find((tab) => tab.id === currentSettingsTab)?.label ?? "Configurações";
+  }
+}
+
+function bindSettingsModal(): void {
+  const modal = settingsModal();
+  if (!modal) return;
+  document.getElementById("settings-close")?.addEventListener("click", () => closeSettings());
+  modal.addEventListener("mousedown", (event) => {
+    if (event.target === modal) closeSettings();
+  });
+  modal.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeSettings();
+  });
+  for (const button of document.querySelectorAll<HTMLButtonElement>(".settings-tab")) {
+    button.addEventListener("click", () => {
+      const tab = button.dataset.settingsTab as SettingsTab | undefined;
+      if (!tab) return;
+      currentSettingsTab = tab;
+      syncSettingsTabs();
+      renderSettings();
+    });
+  }
+  // Abrir um modal de plugin fecha as configurações (e vice-versa).
+  document.addEventListener("plugin-panel-opened", ((event: Event) => {
+    if ((event as CustomEvent<string>).detail !== "settings") closeSettings();
+  }) as EventListener);
+}
+
+function renderSettings(): void {
+  const body = document.getElementById("settings-body");
+  if (!body) return;
+
+  if (currentSettingsTab === "general") {
+    body.innerHTML = `
+      <h3>Geral</h3>
+      <p class="settings-intro">
+        Preferências gerais do aplicativo. A inicialização automática usa o
+        mecanismo do seu sistema operacional.
+      </p>
+      <div class="settings-panel">
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <span class="settings-row-title">Abrir o Canvas Terminal ao iniciar a sessão</span>
+            <span class="settings-row-desc">
+              Abre o aplicativo automaticamente quando você entrar no computador.
+              No Linux, cria uma entrada em <code>~/.config/autostart/</code>; no
+              Windows, registra o app na inicialização do usuário.
+              ${
+                autostartAvailable()
+                  ? ""
+                  : " No modo navegador, esta opção é apenas simulada."
+              }
+            </span>
+          </div>
+          <label class="settings-toggle" id="settings-autostart-wrap"
+            title="Abrir automaticamente ao iniciar a sessão">
+            <input type="checkbox" id="settings-autostart" aria-label="Abrir o Canvas Terminal ao iniciar a sessão" />
+            <span class="settings-toggle-track"></span>
+          </label>
+        </div>
+        <p class="settings-status" id="settings-autostart-status">Verificando…</p>
+      </div>
+    `;
+    bindAutostartRow();
+    return;
+  }
+
+  if (currentSettingsTab === "appearance") {
+    const cards = THEME_GROUPS.map((group) => {
+      const items = group.themes
+        .map((id) => {
+          const theme = getTheme(id);
+          return `
+            <button class="settings-theme-card" type="button" data-theme-id="${id}"
+              style="--theme-bg:${theme.preview.background};--theme-surface:${theme.preview.surface};--theme-accent:${theme.preview.accent}">
+              <span class="settings-theme-preview" aria-hidden="true">
+                <span></span><span></span>
+              </span>
+              <span class="settings-theme-name">${theme.name}</span>
+              <span class="settings-theme-check">✓</span>
+            </button>
+          `;
+        })
+        .join("");
+      return `
+        <div class="settings-nav-group" style="padding-left:0">${group.label}</div>
+        <div class="settings-theme-grid">${items}</div>
+      `;
+    }).join("");
+
+    body.innerHTML = `
+      <h3>Aparência</h3>
+      <p class="settings-intro">
+        O tema muda a interface e a paleta do terminal ao mesmo tempo. Você também
+        pode trocar pelo ícone de paleta no cabeçalho.
+      </p>
+      ${cards}
+    `;
+
+    for (const card of body.querySelectorAll<HTMLButtonElement>(".settings-theme-card")) {
+      const id = card.dataset.themeId as ThemeName | undefined;
+      if (id) {
+        card.classList.toggle("active", id === currentTheme());
+        card.addEventListener("click", () => applyTheme(id));
+      }
+    }
+    return;
+  }
+
+  if (currentSettingsTab === "terminal") {
+    const options = shells
+      .map(
+        (shell) =>
+          `<option value="${escapeHtml(shell.id)}">${escapeHtml(shell.name)}</option>`,
+      )
+      .join("");
+
+    body.innerHTML = `
+      <h3>Terminal</h3>
+      <p class="settings-intro">
+        Preferências dos terminais criados a partir de agora. Cada área de
+        trabalho pode ter sua própria pasta inicial.
+      </p>
+      <div class="settings-panel">
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <span class="settings-row-title">Shell padrão</span>
+            <span class="settings-row-desc">
+              Shell usado em novos terminais e no botão de novo terminal.
+            </span>
+          </div>
+          <select id="settings-shell" class="settings-select"
+            title="Shell padrão para novos terminais" ${shells.length === 0 ? "disabled" : ""}>
+            ${options}
+          </select>
+        </div>
+        <p class="settings-status" id="settings-shell-status"></p>
+      </div>
+    `;
+    bindShellRow();
+    return;
+  }
+
+  if (currentSettingsTab === "plugins") {
+    body.innerHTML = `
+      <h3>Plugins</h3>
+      <p class="settings-intro">
+        Ative os plugins que quiser usar. Os botões deles aparecem no rodapé do
+        painel lateral, acima do Git.
+      </p>
+      <div id="settings-plugin-list" class="settings-plugin-list"></div>
+    `;
+    const list = document.getElementById("settings-plugin-list");
+    if (list) renderPluginSettings(list);
+    return;
+  }
+
+  if (currentSettingsTab === "about") {
+    body.innerHTML = `
+      <h3>Sobre</h3>
+      <p class="settings-intro">
+        Canvas Terminal é um canvas infinito com terminais reais, construído com
+        Tauri 2, TypeScript e xterm.js.
+      </p>
+      <div class="settings-panel">
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <span class="settings-row-title">Canvas Terminal</span>
+            <span class="settings-row-desc">Versão 0.1.0 · licença MIT</span>
+          </div>
+        </div>
+      </div>
+      <div class="settings-panel">
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <span class="settings-row-title">Persistência</span>
+            <span class="settings-row-desc">
+              Terminais, áreas de trabalho, zoom, posição, tema e plugins são
+              salvos automaticamente neste computador.
+            </span>
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  body.innerHTML = `
+    <h3>Atalhos</h3>
+    <p class="settings-intro">Atalhos globais do aplicativo.</p>
+    <table class="settings-shortcuts">
+      ${SHORTCUT_ROWS.map(
+        ([label, shortcut]) =>
+          `<tr><td>${label}</td><td>${shortcut}</td></tr>`,
+      ).join("")}
+    </table>
+  `;
+}
+
+function selectedShellLabel(): string {
+  const shell = shells.find((entry) => entry.id === selectedShell());
+  if (!shell) return "Nenhum shell detectado.";
+  return shell.path ? `${shell.name} — ${shell.path}` : shell.name;
+}
+
+function bindShellRow(): void {
+  const select = document.getElementById("settings-shell") as HTMLSelectElement | null;
+  const status = document.getElementById("settings-shell-status");
+  if (!select || !status) return;
+
+  select.value = selectedShell();
+  status.textContent = `Padrão atual: ${selectedShellLabel()}`;
+  select.addEventListener("change", () => {
+    chooseShell(select.value);
+    status.textContent = `Padrão atual: ${selectedShellLabel()}`;
+    showToast("Shell padrão atualizado");
+  });
+}
+
+function bindAutostartRow(): void {
+  const input = document.getElementById("settings-autostart") as HTMLInputElement | null;
+  const wrap = document.getElementById("settings-autostart-wrap");
+  const status = document.getElementById("settings-autostart-status");
+  if (!input || !wrap || !status) return;
+
+  wrap.classList.add("busy");
+  void (async () => {
+    try {
+      input.checked = await isAutostartEnabled();
+      status.textContent = input.checked
+        ? "Ativado para a sua sessão de usuário."
+        : "Desativado.";
+      status.classList.remove("error");
+    } catch (error) {
+      status.textContent =
+        error instanceof Error ? error.message : String(error);
+      status.classList.add("error");
+    } finally {
+      wrap.classList.remove("busy");
+    }
+  })();
+
+  input.addEventListener("change", () => {
+    const enabled = input.checked;
+    wrap.classList.add("busy");
+    status.classList.remove("error");
+    status.textContent = enabled ? "Ativando…" : "Desativando…";
+    void setAutostart(enabled)
+      .then(() => {
+        status.textContent = enabled
+          ? "Ativado para a sua sessão de usuário."
+          : "Desativado.";
+        showToast(
+          enabled
+            ? "O app abrirá ao iniciar a sua sessão"
+            : "Inicialização automática desativada",
+        );
+      })
+      .catch((error) => {
+        input.checked = !enabled;
+        status.textContent =
+          error instanceof Error ? error.message : String(error);
+        status.classList.add("error");
+      })
+      .finally(() => wrap.classList.remove("busy"));
+  });
 }
 
 /* ---- Menu do aplicativo (antigo cabeçalho) ---- */
@@ -504,7 +1117,7 @@ function bindMenuActions(): void {
   on("menu-save", () => saveNow());
   on("menu-quit", () => void quitApp());
 
-  on("menu-theme", () => toggleTheme());
+  on("menu-settings", () => openSettings("general"));
   on("menu-reset-zoom", () => resetZoom());
   on("menu-center", () => centerView());
   on("menu-fullscreen", () => void toggleFullscreen());
@@ -524,9 +1137,6 @@ function bindMenuActions(): void {
     if (focusedTerminal) editStartupCommand(focusedTerminal);
     else flashHint("Selecione um terminal para configurar o comando.");
   });
-
-  on("menu-shortcuts", () => showShortcutsDialog());
-  on("menu-about", () => showAboutDialog());
 }
 
 /* ---- Diálogos ---- */
@@ -578,41 +1188,26 @@ function closeDialog(): boolean {
   return true;
 }
 
-function showShortcutsDialog(): void {
-  const shortcuts: Array<[string, string]> = [
-    ["Novo terminal", "Ctrl+T"],
-    ["Salvar estado do canvas", "Ctrl+S"],
-    ["Nova área de trabalho", "Ctrl+Shift+T"],
-    ["Próxima / área anterior", "Ctrl+Tab / Ctrl+Shift+Tab"],
-    ["Fechar terminal", "Ctrl+Shift+W"],
-    ["Sair do aplicativo", "Ctrl+Q"],
-    ["Ciclar foco entre terminais", "Ctrl+PageDown / Ctrl+PageUp"],
-    ["Renomear terminal", "F2"],
-    ["Zoom no cursor", "Ctrl + roda do mouse"],
-    ["Aumentar / diminuir zoom", "Ctrl+= / Ctrl+-"],
-    ["Resetar zoom", "Ctrl+0"],
-    ["Pan do canvas", "Espaço + arrastar · botão do meio"],
-    ["Navegar no canvas (clique antes em área vazia)", "WASD / setas"],
-    ["Trocar de área no canvas", "Q / E"],
-    ["Pan horizontal", "Shift + roda do mouse"],
-    ["Tela cheia", "F11 / Ctrl+Shift+F"],
-    ["Alternar tema", "Ctrl+Shift+L"],
-  ];
-  const rows = shortcuts
-    .map(([label, key]) => `<tr><td>${label}</td><td>${key}</td></tr>`)
-    .join("");
-  showDialog("Atalhos de teclado", `<table>${rows}</table>`);
-}
-
-function showAboutDialog(): void {
-  showDialog(
-    "Sobre",
-    `<h3>Canvas Terminal 0.1.0</h3>
-     <p>Canvas infinito com terminais reais, construído com Tauri 2,
-     TypeScript e xterm.js.</p>
-     <p>Terminais, zoom e posição são salvos automaticamente.</p>`,
-  );
-}
+const SHORTCUT_ROWS: Array<[string, string]> = [
+  ["Novo terminal", "Ctrl+T"],
+  ["Salvar estado do canvas", "Ctrl+S"],
+  ["Nova área de trabalho", "Ctrl+Shift+T"],
+  ["Próxima / área anterior", "Ctrl+Tab / Ctrl+Shift+Tab"],
+  ["Fechar terminal", "Ctrl+Shift+W"],
+  ["Sair do aplicativo", "Ctrl+Q"],
+  ["Ciclar foco entre terminais", "Ctrl+PageDown / Ctrl+PageUp"],
+  ["Renomear terminal", "F2"],
+  ["Zoom no cursor", "Ctrl + roda do mouse"],
+  ["Aumentar / diminuir zoom", "Ctrl+= / Ctrl+-"],
+  ["Resetar zoom", "Ctrl+0"],
+  ["Pan do canvas", "Espaço + arrastar · botão do meio"],
+  ["Navegar no canvas (clique antes em área vazia)", "WASD / setas"],
+  ["Trocar de área no canvas", "Q / E"],
+  ["Pan horizontal", "Shift + roda do mouse"],
+  ["Tela cheia", "F11 / Ctrl+Shift+F"],
+  ["Escolher tema", "Ctrl+Shift+L"],
+  ["Configurações", "Ctrl+,"],
+];
 
 /** Configura o comando automático de um terminal, salvo no perfil. */
 function editStartupCommand(terminal: TerminalWindow): void {
@@ -898,23 +1493,33 @@ function flashHint(message: string): void {
 
 function bindPlugins(): void {
   pluginSettings = loadPluginSettings();
-  tokenUsageWidget = new TokenUsageWidget();
+  tokenUsageModal = new TokenUsageModal();
   clickUpPlugin = new ClickUpPlugin();
-  renderPluginMenu();
   applyPluginStates();
+
+  // Os botões do painel lateral continuam visíveis com o plugin desligado;
+  // o primeiro clique ativa o plugin e abre o modal correspondente.
+  document.addEventListener("plugin-activate-request", ((event: Event) => {
+    const id = (event as CustomEvent<string>).detail;
+    const plugin = PLUGINS.find((entry) => entry.id === id);
+    if (!plugin) return;
+    if (!isPluginEnabled(pluginSettings, plugin.id)) {
+      activatePlugin(plugin, true);
+    }
+    if (plugin.id === "token-usage") tokenUsageModal?.open();
+    else if (plugin.id === "clickup") clickUpPlugin?.open();
+  }) as EventListener);
 }
 
-/** Monta o menu "Plugins" a partir do registro (um interruptor por plugin). */
-function renderPluginMenu(): void {
-  const list = document.getElementById("plugin-list");
-  if (!list) return;
+/** Monta os interruptores da aba Plugins das configurações. */
+function renderPluginSettings(list: HTMLElement): void {
   list.innerHTML = "";
 
   for (const plugin of PLUGINS) {
     const row = document.createElement("div");
-    row.className = "plugin-item";
+    row.className = "plugin-item settings-plugin-item";
     row.dataset.id = plugin.id;
-    row.setAttribute("role", "menuitemcheckbox");
+    row.setAttribute("role", "switch");
     row.tabIndex = 0;
 
     const info = document.createElement("div");
@@ -935,7 +1540,9 @@ function renderPluginMenu(): void {
     toggle.setAttribute("aria-hidden", "true");
 
     row.append(info, toggle);
-    row.addEventListener("click", () => activatePlugin(plugin, !isPluginEnabled(pluginSettings, plugin.id)));
+    row.addEventListener("click", () =>
+      activatePlugin(plugin, !isPluginEnabled(pluginSettings, plugin.id)),
+    );
     row.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
@@ -945,28 +1552,30 @@ function renderPluginMenu(): void {
     list.appendChild(row);
   }
 
-  syncPluginMenu();
+  syncPluginSettings();
 }
 
-function syncPluginMenu(): void {
-  for (const row of document.querySelectorAll<HTMLElement>("#plugin-list .plugin-item")) {
+function syncPluginSettings(): void {
+  for (const row of document.querySelectorAll<HTMLElement>(
+    "#settings-plugin-list .plugin-item",
+  )) {
     const id = row.dataset.id ?? "";
     const enabled = isPluginEnabled(pluginSettings, id);
     row.setAttribute("aria-checked", String(enabled));
   }
 }
 
-/** Liga/desliga um plugin, persiste e aplica o efeito (o menu fica aberto). */
+/** Liga/desliga um plugin, persiste e aplica o efeito. */
 function activatePlugin(plugin: PluginDefinition, enabled: boolean): void {
   pluginSettings.enabled[plugin.id] = enabled;
   savePluginSettings(pluginSettings);
-  syncPluginMenu();
+  syncPluginSettings();
   applyPluginStates();
   flashHint(`Plugin "${plugin.name}" ${enabled ? "ativado" : "desativado"}.`);
 }
 
 function applyPluginStates(): void {
-  tokenUsageWidget?.setEnabled(isPluginEnabled(pluginSettings, "token-usage"));
+  tokenUsageModal?.setEnabled(isPluginEnabled(pluginSettings, "token-usage"));
   clickUpPlugin?.setEnabled(isPluginEnabled(pluginSettings, "clickup"));
 }
 
@@ -1426,6 +2035,10 @@ function bindWorkspaceRail(): void {
 
   document.getElementById("rail-git")?.addEventListener("click", () => {
     closeAppMenu();
+    closeThemeMenu();
+    document.dispatchEvent(
+      new CustomEvent("plugin-panel-opened", { detail: "git" }),
+    );
     gitPanel?.open();
   });
 
@@ -1555,6 +2168,19 @@ function renderWorkspaceRail(): void {
   list
     .querySelector<HTMLElement>(".rail-workspace.active")
     ?.scrollIntoView({ block: "nearest" });
+  syncHeaderTitle();
+}
+
+/** O centro do cabeçalho mostra a área ativa (ou o nome do app). */
+function syncHeaderTitle(): void {
+  const title = document.getElementById("header-title");
+  const icon = document.querySelector<HTMLElement>(".header-terminal-icon");
+  if (!title) return;
+  title.textContent = activeWorkspace?.name || "Canvas Terminal";
+  title.title = activeWorkspace?.folder
+    ? `${activeWorkspace.name}\n${activeWorkspace.folder}`
+    : title.textContent;
+  if (icon) icon.style.color = activeWorkspace?.color || "";
 }
 
 function showWorkspaceContextMenu(
@@ -2022,6 +2648,7 @@ function setFullscreenUi(on: boolean): void {
   ui.fullscreenBtn.title = on ? "Sair da tela cheia (F11)" : "Tela cheia (F11)";
   ui.fullscreenBtn.setAttribute("aria-pressed", on ? "true" : "false");
   closeAppMenu();
+  closeThemeMenu();
   syncMaximizedView();
   // O viewport mudou de tamanho: reavalia grid e janelas maximizadas.
   refreshMaximizedGeometry();
@@ -2076,6 +2703,14 @@ function bindGlobalShortcuts(): void {
 
       if (e.key === "Escape") {
         if (closeDialog()) {
+          own();
+          return;
+        }
+        if (closeSettings()) {
+          own();
+          return;
+        }
+        if (closeThemeMenu()) {
           own();
           return;
         }
@@ -2175,7 +2810,12 @@ function bindGlobalShortcuts(): void {
       }
       if (mod && e.shiftKey && e.key.toLowerCase() === "l") {
         own();
-        toggleTheme();
+        toggleThemeMenu();
+        return;
+      }
+      if (mod && e.key === ",") {
+        own();
+        if (!closeSettings()) openSettings("general");
         return;
       }
     },
@@ -2262,7 +2902,9 @@ function resetZoom(): void {
 function updateStatus(): void {
   syncMaximizedView();
   ui.zoom.textContent = `${Math.round(canvas.zoom * 100)}%`;
-  ui.count.textContent = String(canvas.getAllTerminals().length);
+  const count = canvas.getAllTerminals().length;
+  ui.count.textContent = String(count);
+  ui.countLabel.textContent = count === 1 ? "terminal" : "terminais";
 }
 
 /**

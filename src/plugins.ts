@@ -1,9 +1,9 @@
 /**
  * Registro de plugins do Canvas Terminal.
  *
- * O usuário ativa/desativa plugins pelo menu "Plugins" do cabeçalho. O estado
- * fica no `localStorage` para sobreviver a recarregamentos, igual aos comandos
- * rápidos e ao layout das áreas de trabalho.
+ * O usuário ativa/desativa plugins pelo menu "Plugins" do menu do aplicativo.
+ * O estado fica no `localStorage` para sobreviver a recarregamentos, igual aos
+ * comandos rápidos e ao layout das áreas de trabalho.
  */
 
 export interface PluginDefinition {

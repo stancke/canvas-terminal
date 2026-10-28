@@ -332,7 +332,7 @@ export class ClickUpPlugin {
 
   constructor() {
     this.panel = document.getElementById("clickup-modal")!;
-    this.handle = document.getElementById("clickup-hotzone")!;
+    this.handle = document.getElementById("rail-clickup")!;
     this.body = document.getElementById("clickup-body")!;
     this.detail = document.getElementById("clickup-detail")!;
     this.subtitle = document.getElementById("clickup-subtitle")!;
@@ -386,11 +386,21 @@ export class ClickUpPlugin {
     }
 
     this.render();
-    // Primeira vez: abre direto para colar o token.
-    if (!this.settings.token) this.show();
+    // Não abre sozinho: o botão do ClickUp no painel lateral abre o modal.
   }
 
   /* ---- Abrir/fechar ---- */
+
+  /** Abre o modal pelo botão do painel lateral (ou pelo cabeçalho). */
+  open(): void {
+    if (!this.enabled) {
+      document.dispatchEvent(
+        new CustomEvent("plugin-activate-request", { detail: "clickup" }),
+      );
+      return;
+    }
+    this.show();
+  }
 
   private show(): void {
     if (!this.enabled) return;
@@ -406,7 +416,12 @@ export class ClickUpPlugin {
   }
 
   private toggle(): void {
-    if (!this.enabled) return;
+    if (!this.enabled) {
+      document.dispatchEvent(
+        new CustomEvent("plugin-activate-request", { detail: "clickup" }),
+      );
+      return;
+    }
     if (this.panel.classList.contains("hidden")) this.show();
     else this.hide();
   }

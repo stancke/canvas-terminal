@@ -4,13 +4,13 @@ Aplicativo desktop de **canvas infinito** com terminais reais (PowerShell, cmd, 
 
 O mesmo código-fonte compila tanto no **Windows** quanto no **Linux** (e macOS, com os devidos cuidados de empacotamento).
 
-Tema escuro (padrão):
+Catppuccin Mocha com o seletor de temas do cabeçalho aberto:
 
-![Canvas Terminal no tema escuro](docs/screenshot.png)
+![Canvas Terminal no tema Catppuccin Mocha](docs/screenshot.png)
 
-Tema claro:
+Catppuccin Latte:
 
-![Canvas Terminal no tema claro](docs/screenshot-claro.png)
+![Canvas Terminal no tema Catppuccin Latte](docs/screenshot-claro.png)
 
 ---
 
@@ -93,23 +93,31 @@ Os pacotes ficarão em `src-tauri/target/release/bundle/` (subpastas `deb/`, `rp
 
 ## Interface
 
-A interface é organizada em um **painel lateral esquerdo**, sempre visível:
+A interface é organizada por um **cabeçalho de janela** e um **painel lateral
+esquerdo**:
 
-- O **primeiro item** (grade) abre o **menu do aplicativo**, que reúne as
-  categorias **Arquivo**, **Exibir**, **Janela**, **Plugins** e **Ajuda**, além
-  do seletor de shell, do botão de tela cheia e do zoom/contagem de terminais.
-  O antigo cabeçalho fixo deixou de existir.
+- O cabeçalho mostra o **nome da área de trabalho ativa** ao centro e, à
+  direita, o resumo de **uso de tokens** (quando o plugin está ligado), o
+  **zoom**, o **seletor de temas** (ícone de paleta), as **configurações**
+  (engrenagem) e os controles **minimizar / maximizar / fechar**. A janela usa
+  moldura própria (`decorations: false`), com alças invisíveis nas bordas para
+  redimensionar.
+- O **ícone de grade** no canto superior esquerdo do cabeçalho abre o **menu do
+  aplicativo**, que reúne as categorias **Arquivo**, **Exibir** e **Janela** — apenas ações
+  (novo/fechar terminal, salvar, sair, áreas de trabalho, zoom, tela cheia) —
+  além do botão de tela cheia e da contagem de terminais. As **preferências**
+  ficam em **Configurações** (ícone de engrenagem no cabeçalho ou `Ctrl+,`).
 - Abaixo ficam as **áreas de trabalho** (uma bolinha por área, com cor, ícone ou
-  imagem), o botão **+** para criar uma nova área e, no rodapé, o botão do
-  **Git**, que abre as alterações da pasta rastreada.
+  imagem) e o botão **+**. No rodapé estão, de cima para baixo, **Uso de
+  tokens**, **ClickUp** e **Git**.
 - O painel tem 46 px e pode ser **recolhido/expandido** pela alça discreta na
   borda (uma seta no meio da tela). No modo maximizado ele recolhe sozinho e a
   alça some, deixando o terminal usar toda a largura.
 
-Use **Exibir → Tela cheia** (`F11`) para esconder a moldura da janela, a barra
-de tarefas do sistema e a barra de status. O painel e o menu continuam
-disponíveis. Para sair da tela cheia use **F11**/`Ctrl+Shift+F`, o botão **⛶**
-no menu ou o item **Exibir → Sair da tela cheia**; `Esc` não sai do fullscreen.
+Use **Exibir → Tela cheia** (`F11`) para esconder o cabeçalho, a barra de status
+e a barra de tarefas do sistema. O painel lateral continua disponível. Para sair
+da tela cheia use **F11**/`Ctrl+Shift+F`, o botão **⛶** no menu ou o item
+**Exibir → Sair da tela cheia**; `Esc` não sai do fullscreen.
 
 O zoom é **por área de trabalho**: cada área guarda o seu próprio nível e ele é
 restaurado ao trocar de área. Janelas, barra de título, controles e o texto dos
@@ -252,14 +260,17 @@ seguintes, independentemente da área de trabalho ativa.
 
 ## Plugins
 
-O menu **Plugins** no menu do aplicativo lista os plugins disponíveis, cada um
-com um interruptor. O estado fica em `localStorage["canvas-terminal.plugins.v1"]`
-e é lembrado entre execuções.
+A aba **Configurações → Plugins** lista os plugins disponíveis, cada um com um
+interruptor. O estado fica em `localStorage["canvas-terminal.plugins.v1"]` e é
+lembrado entre execuções.
 
 ### Uso de tokens
 
-Primeiro plugin do app. Quando ativado, mostra no canto inferior direito um
-painel com o consumo de tokens dos agentes instalados na máquina:
+Primeiro plugin do app. O botão fica no rodapé do painel lateral, **acima do
+ClickUp e do Git**, e abre um **modal** com o consumo de tokens dos agentes
+instalados na máquina. Um resumo compacto também aparece no cabeçalho da janela
+(`Claude 5h … 7d … | OpenCode …`). Quando o plugin está desligado, o botão fica
+esmaecido; o primeiro clique ativa o plugin e abre o modal.
 
 - **Claude Code** — lê os transcripts em `~/.claude/projects/**/*.jsonl`
   (`message.usage` de cada resposta do assistente).
@@ -280,9 +291,9 @@ painel com o consumo de tokens dos agentes instalados na máquina:
   consumo real da janela.
 - A barra fina mostra a composição do total: entrada, saída, cache escrito e
   raciocínio.
-- O painel fica escondido atrás de uma alça discreta na borda direita e
-  abre/fecha ao clicar nela — igual aos comandos rápidos.
-- Atualiza a cada 20 s, ao abrir o painel e ao voltar para a janela.
+- O modal fecha com `Esc`, pelo **×** ou com um clique fora; abrir o ClickUp
+  fecha o uso de tokens e vice-versa.
+- Atualiza a cada 20 s, ao abrir o modal e ao voltar para a janela.
 
 Nada é enviado para fora da máquina: a leitura é somente dos arquivos locais
 dos próprios agentes. O botão `⟳` força uma atualização imediata.
@@ -290,10 +301,12 @@ dos próprios agentes. O botão `⟳` força uma atualização imediata.
 ### ClickUp
 
 Lista as tarefas de uma lista do ClickUp em uma **modal grande** (semelhante à
-de alterações do Git), com a alça de acesso no **canto superior direito**.
+de alterações do Git), com o botão de acesso no **rodapé do painel lateral**,
+entre o uso de tokens e o Git.
 
-1. Ative o plugin em **Plugins → ClickUp**. A modal abre pedindo o **token
-   pessoal da API** (ClickUp → Configurações → Apps → API Token).
+1. Ative o plugin em **Configurações → Plugins → ClickUp** ou clique no botão
+   do ClickUp. A modal abre pedindo o **token pessoal da API** (ClickUp →
+   Configurações → Apps → API Token).
 2. Escolha **workspace → espaço → pasta (opcional) → lista** e clique em
    **Usar esta lista**. A engrenagem `⚙` reabre essa seleção a qualquer momento.
 3. A coluna da esquerda traz os **filtros** (atribuídas a mim, status) e a
@@ -326,8 +339,9 @@ O token é guardado no `localStorage` do app (`canvas-terminal.clickup.v1`) e s�
 | `Ctrl+0` (ou `Cmd+0`) | Resetar zoom (100%, ancorado no centro) |
 | `Ctrl+=` / `Ctrl+-` | Aumentar / diminuir o zoom |
 | `F11` / `Ctrl+Shift+F` | Alternar tela cheia (só sai por aqui ou pelo menu) |
-| `Esc` | Fechar menu ou diálogo |
-| `Ctrl+Shift+L` (ou `Cmd+Shift+L`) | Alternar tema claro/escuro |
+| `Esc` | Fechar menu, modal ou diálogo |
+| `Ctrl+,` (ou `Cmd+,`) | Abrir as configurações |
+| `Ctrl+Shift+L` (ou `Cmd+Shift+L`) | Abrir o seletor de temas |
 | `Ctrl+Shift+V` / `Ctrl+V` (ou `Cmd+Shift+V` / `Cmd+V`) | Colar no terminal |
 | `Ctrl+C` (ou `Cmd+C`) com seleção | Copiar do terminal |
 | `F2` | Renomear título do terminal |
@@ -340,11 +354,18 @@ O token é guardado no `localStorage` do app (`canvas-terminal.clickup.v1`) e s�
 
 ---
 
-## Tema (claro / escuro)
+## Temas
 
-O app tem dois temas completos. Escolha em **Exibir → Tema claro/escuro** ou
-com `Ctrl+Shift+L` — a troca é imediata, inclusive no conteúdo dos terminais
-(a paleta do xterm.js é reaplicada nos terminais já abertos).
+O app tem **oito temas completos**, agrupados no seletor do cabeçalho:
+
+- **Catppuccin**: Latte, Frappé, Macchiato e Mocha;
+- **One**: One Light e One Dark;
+- **Apple**: Apple Light e Apple Dark.
+
+Clique no **ícone de paleta** no canto superior direito (ou use
+`Ctrl+Shift+L`) para abrir o menu, ou abra **Configurações → Aparência** para ver
+as amostras lado a lado. A troca é imediata e muda **interface + paleta ANSI do
+xterm.js** (a paleta é reaplicada nos terminais já abertos).
 
 Sem escolha explícita, o app **segue o tema do sistema operacional**
 (`prefers-color-scheme`); a escolha manual é lembrada em:
@@ -353,10 +374,38 @@ Sem escolha explícita, o app **segue o tema do sistema operacional**
 localStorage["canvas-terminal.theme.v1"]
 ```
 
-As cores ficam em variáveis CSS em `src/styles.css` (`:root` = escuro,
-`:root[data-theme="light"]` = claro); as paletas do terminal estão em
-`src/theme.ts`. A moldura da janela segue o sistema (`theme: null` no
-`tauri.conf.json`).
+As cores da interface ficam em variáveis CSS em `src/styles.css`, uma por
+`data-theme`; as paletas do terminal estão em `src/theme.ts`. Os valores antigos
+`dark`/`light` são migrados para `one-dark`/`one-light`. A janela usa moldura
+própria (`decorations: false`), então o cabeçalho também desenha os controles de
+minimizar, maximizar e fechar.
+
+## Inicialização automática
+
+Em **Configurações → Geral** há a opção **Abrir o Canvas Terminal ao iniciar a
+sessão**. No app instalado ela usa o plugin oficial `tauri-plugin-autostart`
+(Windows: entrada de inicialização; Linux: `~/.config/autostart/`; macOS:
+LaunchAgent). No modo navegador a preferência é apenas simulada em
+`localStorage`, para a tela continuar navegável.
+
+## Configurações
+
+O modal é aberto pelo ícone de engrenagem do cabeçalho, por **Exibir →
+Configurações...** ou com `Ctrl+,`. As abas reúnem as preferências que antes
+ficavam espalhadas pelo menu:
+
+- **Geral** — inicialização automática.
+- **Aparência** — os oito temas, com prévia de cores.
+- **Terminal** — **shell padrão** dos novos terminais (antes no rodapé do menu).
+  A escolha é lembrada em `localStorage["canvas-terminal.shell.v1"]`.
+- **Plugins** — ativação do uso de tokens e do ClickUp (antes no menu Plugins).
+- **Atalhos** — a tabela de atalhos (antes em Ajuda).
+- **Sobre** — versão, licença e informações de persistência (antes em Ajuda).
+
+O menu do aplicativo ficou apenas com as **ações**: Arquivo (novo/fechar
+terminal, salvar, sair), Exibir (configurações, zoom, centralizar, tela cheia) e
+Janela (áreas de trabalho, organização, maximizar/minimizar, comando de
+inicialização).
 
 ---
 
@@ -383,6 +432,12 @@ Preferências independentes do perfil:
   recolhido (`1`) ou expandido (`0`); o modo maximizado recolhe sempre.
 - `localStorage["canvas-terminal.git-folder.v1"]` — pasta rastreada pelo painel
   do Git.
+- `localStorage["canvas-terminal.theme.v1"]` — tema escolhido no cabeçalho.
+- `localStorage["canvas-terminal.plugins.v1"]` — plugins ligados/desligados.
+- `localStorage["canvas-terminal.shell.v1"]` — shell padrão dos novos terminais.
+- Inicialização automática — estado do sistema operacional
+  (`~/.config/autostart/` no Linux); no navegador, simulado em
+  `localStorage["canvas-terminal.autostart.v1"]`.
 
 O layout antigo de área única (`canvas-terminal.layout.v1`) é migrado
 automaticamente para a primeira área na primeira execução desta versão.
@@ -409,7 +464,9 @@ O app detecta automaticamente os shells disponíveis no sistema operacional:
 4. `pwsh` (PowerShell 7)
 5. `sh`
 
-O shell padrão escolhido é `$SHELL` (se válido) → `bash` → `zsh` → `sh`.
+Escolha o shell padrão em **Configurações → Terminal**; a escolha fica em
+`localStorage["canvas-terminal.shell.v1"]`. Sem escolha explícita, o backend
+usa `$SHELL` (se válido) → `bash` → `zsh` → `sh`.
 
 Para forçar um shell específico em qualquer plataforma, defina a variável de ambiente:
 
@@ -472,7 +529,11 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools/limpar-conhosts-orfaos.ps1
 - `src/workspace-icons.ts` — ícones e cores das áreas de trabalho
 - `src/snapping.ts` — encaixes e linhas-guia de alinhamento
 - `src/git-panel.ts` — modal de alterações do Git e seletor de pasta
-- `src/styles.css` — tema escuro
+- `src/token-usage.ts` — modal e resumo de uso de tokens
+- `src/clickup.ts` — modal e configuração do ClickUp
+- `src/theme.ts` — registro dos temas, paletas do xterm.js e persistência
+- `src/autostart.ts` — ponte para o plugin de inicialização automática
+- `src/styles.css` — variáveis dos oito temas e cromo da interface
 - `src-tauri/src/shells.rs` — descoberta de shells por plataforma (`#[cfg(windows)]` / `#[cfg(unix)]`)
 - `src-tauri/src/pty.rs` — backend PTY com `portable-pty`
 - `src-tauri/src/git.rs` — status e diffs do Git para o painel lateral

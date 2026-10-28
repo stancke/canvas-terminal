@@ -7,15 +7,32 @@
       // escura e só depois clareia quando o usuário escolheu o tema claro.
       (function () {
         try {
+          var ids = [
+            "catppuccin-latte",
+            "catppuccin-frappe",
+            "catppuccin-macchiato",
+            "catppuccin-mocha",
+            "one-light",
+            "one-dark",
+            "apple-light",
+            "apple-dark",
+          ];
           var saved = localStorage.getItem("canvas-terminal.theme.v1");
+          if (saved === "dark") saved = "one-dark";
+          else if (saved === "light") saved = "one-light";
           var theme =
-            saved === "light" || saved === "dark"
+            ids.indexOf(saved) >= 0
               ? saved
               : window.matchMedia("(prefers-color-scheme: light)").matches
-                ? "light"
-                : "dark";
+                ? "one-light"
+                : "one-dark";
+          var mode =
+            theme.indexOf("light") >= 0 || theme === "catppuccin-latte"
+              ? "light"
+              : "dark";
           document.documentElement.dataset.theme = theme;
-          document.documentElement.style.colorScheme = theme;
+          document.documentElement.dataset.themeMode = mode;
+          document.documentElement.style.colorScheme = mode;
         } catch (e) {}
       })();
     </script>
@@ -26,28 +43,99 @@
   </head>
 
   <body>
-    <!-- Painel lateral: menu do app, áreas de trabalho e Git. -->
+    <!-- Bordas invisíveis: a janela usa moldura própria (sem decoração nativa). -->
+    <div id="window-resizers" aria-hidden="true">
+      <div class="resizer n" data-resize="North"></div>
+      <div class="resizer s" data-resize="South"></div>
+      <div class="resizer e" data-resize="East"></div>
+      <div class="resizer w" data-resize="West"></div>
+      <div class="resizer ne" data-resize="NorthEast"></div>
+      <div class="resizer nw" data-resize="NorthWest"></div>
+      <div class="resizer se" data-resize="SouthEast"></div>
+      <div class="resizer sw" data-resize="SouthWest"></div>
+    </div>
+
+    <!-- Cabeçalho: nome da área ativa, temas, configurações e controles. -->
+    <header id="app-header" data-tauri-drag-region>
+      <div class="header-left" data-tauri-drag-region>
+        <button
+          id="rail-app-menu"
+          class="rail-button rail-app-button"
+          type="button"
+          title="Menu do aplicativo"
+          aria-label="Menu do aplicativo"
+          aria-haspopup="true"
+          aria-expanded="false"
+          aria-controls="app-menu"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.1" />
+            <rect x="9" y="2.5" width="4.5" height="4.5" rx="1.1" />
+            <rect x="2.5" y="9" width="4.5" height="4.5" rx="1.1" />
+            <rect x="9" y="9" width="4.5" height="4.5" rx="1.1" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="header-center" data-tauri-drag-region>
+        <span class="header-terminal-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="1.7" y="2.7" width="12.6" height="10.6" rx="2" />
+            <path d="M4.4 6.1 6.4 8l-2 1.9M8.5 10.1h3.1" />
+          </svg>
+        </span>
+        <span id="header-title">Canvas Terminal</span>
+      </div>
+
+      <div class="header-right" data-tauri-drag-region>
+        <button id="header-usage" class="header-pill header-usage hidden" type="button"
+          title="Uso de tokens (Claude Code e OpenCode)" aria-label="Uso de tokens">
+        </button>
+        <button id="header-zoom" class="header-pill" type="button" title="Zoom atual — clique para resetar">
+          <span id="zoom-indicator">100%</span>
+        </button>
+        <button id="header-theme" class="header-button" type="button" title="Tema"
+          aria-label="Escolher tema" aria-haspopup="menu" aria-expanded="false"
+          aria-controls="theme-menu">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3a9 9 0 1 0 0 18h1.4a1.9 1.9 0 0 0 .4-3.8 1.6 1.6 0 0 1 1.1-2.8h2.2A3.9 3.9 0 0 0 21 10.5 9 9 0 0 0 12 3Z" />
+            <circle cx="7.6" cy="10.1" r="1.05" fill="currentColor" stroke="none" />
+            <circle cx="10.4" cy="7.1" r="1.05" fill="currentColor" stroke="none" />
+            <circle cx="14.2" cy="7.3" r="1.05" fill="currentColor" stroke="none" />
+            <circle cx="16.8" cy="10.2" r="1.05" fill="currentColor" stroke="none" />
+          </svg>
+        </button>
+        <button id="header-settings" class="header-button" type="button"
+          title="Configurações (Ctrl+,)" aria-label="Configurações">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3.1" />
+            <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 0 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 0 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
+          </svg>
+        </button>
+        <div id="window-controls">
+          <button id="win-minimize" class="window-control" type="button" title="Minimizar" aria-label="Minimizar">
+            <svg viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.2">
+              <path d="M2 6h8" />
+            </svg>
+          </button>
+          <button id="win-maximize" class="window-control" type="button" title="Maximizar" aria-label="Maximizar">
+            <svg viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.2">
+              <rect x="2.2" y="2.2" width="7.6" height="7.6" rx="1" />
+            </svg>
+          </button>
+          <button id="win-close" class="window-control close" type="button" title="Fechar" aria-label="Fechar">
+            <svg viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3">
+              <path d="M2.4 2.4l7.2 7.2M9.6 2.4 2.4 9.6" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div id="theme-menu" class="theme-menu hidden" role="menu" aria-label="Temas"></div>
+
+    <!-- Painel lateral: áreas de trabalho, plugins e Git. -->
     <aside id="workspace-rail" aria-label="Áreas de trabalho">
-      <button
-        id="rail-app-menu"
-        class="rail-button rail-app-button"
-        type="button"
-        title="Menu do aplicativo"
-        aria-label="Menu do aplicativo"
-        aria-haspopup="true"
-        aria-expanded="false"
-        aria-controls="app-menu"
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5">
-          <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.1" />
-          <rect x="9" y="2.5" width="4.5" height="4.5" rx="1.1" />
-          <rect x="2.5" y="9" width="4.5" height="4.5" rx="1.1" />
-          <rect x="9" y="9" width="4.5" height="4.5" rx="1.1" />
-        </svg>
-      </button>
-
-      <div class="rail-separator"></div>
-
       <div
         id="workspace-rail-list"
         role="tablist"
@@ -66,6 +154,32 @@
       </button>
 
       <div class="rail-footer">
+        <button
+          id="rail-token-usage"
+          class="rail-button rail-plugin-button"
+          type="button"
+          title="Uso de tokens (Claude Code e OpenCode)"
+          aria-label="Uso de tokens"
+          aria-haspopup="dialog"
+          aria-controls="usage-modal"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+            <path d="M3 13V9M8 13V4M13 13V7" />
+          </svg>
+        </button>
+        <button
+          id="rail-clickup"
+          class="rail-button rail-plugin-button"
+          type="button"
+          title="ClickUp"
+          aria-label="ClickUp"
+          aria-haspopup="dialog"
+          aria-controls="clickup-modal"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 4.5 5 6.6 8 3l3 3.6 2-2.1M3 11.5 5 9.4 8 13l3-3.6 2 2.1" />
+          </svg>
+        </button>
         <button
           id="rail-git"
           class="rail-button"
@@ -148,9 +262,9 @@
             Exibir
           </button>
           <div class="menu-dropdown" role="menu">
-            <button class="menu-item" id="menu-theme" role="menuitem">
-              <span class="menu-label">Tema escuro</span>
-              <span class="menu-shortcut">Ctrl+Shift+L</span>
+            <button class="menu-item" id="menu-settings" role="menuitem">
+              <span class="menu-label">Configurações...</span>
+              <span class="menu-shortcut">Ctrl+,</span>
             </button>
             <div class="menu-separator"></div>
             <button class="menu-item" id="menu-reset-zoom" role="menuitem">
@@ -210,35 +324,11 @@
           </div>
         </div>
 
-        <div class="menu" id="menu-plugins">
-          <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false">
-            Plugins
-          </button>
-          <div class="menu-dropdown plugin-dropdown" role="menu" aria-label="Plugins">
-            <p class="plugin-hint">Ative os plugins que quiser usar.</p>
-            <div id="plugin-list"></div>
-          </div>
-        </div>
-
-        <div class="menu">
-          <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false">
-            Ajuda
-          </button>
-          <div class="menu-dropdown" role="menu">
-            <button class="menu-item" id="menu-shortcuts" role="menuitem">
-              <span class="menu-label">Atalhos de teclado</span>
-            </button>
-            <button class="menu-item" id="menu-about" role="menuitem">
-              <span class="menu-label">Sobre o Canvas Terminal</span>
-            </button>
-          </div>
-        </div>
       </div>
 
       <div class="app-menu-tools">
         <div class="app-menu-row">
-          <label class="shell-label" for="shell-select">Shell</label>
-          <select id="shell-select" title="Shell padrão para novos terminais"></select>
+          <span class="app-menu-label">Tela cheia</span>
           <button
             id="btn-fullscreen"
             class="toolbar-icon"
@@ -259,8 +349,8 @@
           </button>
         </div>
         <div class="app-menu-status">
-          <span><span id="zoom-indicator" title="Zoom atual">100%</span> zoom</span>
-          <span><span id="terminal-count" title="Terminais abertos">0</span> terminais</span>
+          <span><span id="terminal-count" title="Terminais abertos">0</span>
+            <span id="terminal-count-label">terminais</span></span>
         </div>
       </div>
     </nav>
@@ -404,53 +494,71 @@
       </p>
     </aside>
 
+    <!-- Uso de tokens em modal: Claude Code e OpenCode lado a lado. -->
     <div
-      id="plugin-hotzone"
-      role="button"
-      tabindex="0"
-      aria-label="Uso de tokens"
-      aria-controls="plugin-widget"
+      id="usage-modal"
+      class="git-modal usage-modal hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="usage-modal-title"
     >
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path
-          d="M3 13V9M8 13V4M13 13V7"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.6"
-          stroke-linecap="round"
-        />
-      </svg>
-    </div>
-
-    <div
-      id="clickup-hotzone"
-      role="button"
-      tabindex="0"
-      aria-label="ClickUp"
-      aria-controls="clickup-modal"
-    >
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path
-          d="M3 4.5 5 6.6 8 3l3 3.6 2-2.1M3 11.5 5 9.4 8 13l3-3.6 2 2.1"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
-    </div>
-
-    <aside id="plugin-widget" aria-label="Uso de tokens">
-      <div class="plugin-header">
-        <span class="plugin-title">Uso de tokens</span>
-        <span id="plugin-updated" class="plugin-updated"></span>
-        <button id="plugin-refresh" class="plugin-icon" type="button" title="Atualizar agora">
-          ⟳
-        </button>
+      <div class="dialog-card usage-modal-card">
+        <div class="dialog-header git-modal-header usage-modal-header">
+          <span class="git-repo-badge" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+              <path d="M3 13V9M8 13V4M13 13V7" />
+            </svg>
+          </span>
+          <span id="usage-modal-title" class="git-modal-title">Uso de tokens</span>
+          <span id="usage-modal-updated" class="plugin-updated"></span>
+          <span class="usage-modal-subtitle">Claude Code · OpenCode</span>
+          <button id="usage-refresh" class="plugin-icon" type="button" title="Atualizar agora">
+            ⟳
+          </button>
+          <button id="usage-modal-close" class="plugin-icon" type="button" title="Fechar (Esc)">
+            ×
+          </button>
+        </div>
+        <div id="usage-body" class="usage-modal-body"></div>
+        <div class="usage-modal-footer">
+          <span>Leitura local dos transcripts; nada é enviado para fora.</span>
+          <span>Atualiza a cada 20 s</span>
+        </div>
       </div>
-      <div id="plugin-body" class="plugin-body"></div>
-    </aside>
+    </div>
+
+    <!-- Configurações do aplicativo. -->
+    <div
+      id="settings-modal"
+      class="settings-modal hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+    >
+      <div class="dialog-card settings-card">
+        <aside class="settings-nav" aria-label="Seções de configuração">
+          <div class="settings-nav-head" id="settings-title">Configurações</div>
+          <div class="settings-nav-group">Aplicativo</div>
+          <button class="settings-tab active" type="button" data-settings-tab="general">Geral</button>
+          <button class="settings-tab" type="button" data-settings-tab="appearance">Aparência</button>
+          <button class="settings-tab" type="button" data-settings-tab="terminal">Terminal</button>
+          <button class="settings-tab" type="button" data-settings-tab="plugins">Plugins</button>
+          <div class="settings-nav-group">Suporte</div>
+          <button class="settings-tab" type="button" data-settings-tab="shortcuts">Atalhos</button>
+          <button class="settings-tab" type="button" data-settings-tab="about">Sobre</button>
+          <div class="settings-nav-foot">Canvas Terminal 0.1.0</div>
+        </aside>
+        <section class="settings-main">
+          <header class="settings-main-head">
+            <h2 id="settings-heading">Geral</h2>
+            <button id="settings-close" class="plugin-icon" type="button" title="Fechar (Esc)">
+              ×
+            </button>
+          </header>
+          <div id="settings-body" class="settings-body"></div>
+        </section>
+      </div>
+    </div>
 
     <!-- ClickUp em modal grande: lista/filtros à esquerda e detalhes à direita. -->
     <div

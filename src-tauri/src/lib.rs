@@ -27,6 +27,10 @@ pub fn run() {
 
     Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(Arc::clone(&state))
         .invoke_handler(generate_handler![
             pty_list_shells,

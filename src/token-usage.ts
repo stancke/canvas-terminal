@@ -1,8 +1,8 @@
 /**
- * Plugin "Uso de tokens" (widget flutuante no canto inferior direito).
+ * Plugin "Uso de tokens" (modal).
  *
- * O painel fica escondido atrás da alça lateral e abre/fecha ao clicar nela
- * — mesmo comportamento dos comandos rápidos.
+ * O botão fica no rodapé do painel lateral, acima do ClickUp e do Git. O modal
+ * abre/fecha pelo botão e resume o consumo também no cabeçalho da janela.
  *
  * Os dados vêm do comando `usage_report` (backend em `src-tauri/src/usage.rs`),
  * que lê apenas os arquivos locais do Claude Code e do OpenCode.
@@ -94,13 +94,14 @@ function formatReset(resetsAt: number | null, now: number): string {
   return hours > 0 ? `renova em ${days} d ${hours} h` : `renova em ${days} d`;
 }
 
-/* ---- Widget ---- */
+/* ---- Modal ---- */
 
-export class TokenUsageWidget {
+export class TokenUsageModal {
   private readonly panel: HTMLElement;
-  private readonly hotzone: HTMLElement;
+  private readonly handle: HTMLElement;
   private readonly body: HTMLElement;
   private readonly updated: HTMLElement;
+  private readonly headerChip: HTMLElement;
   private refreshButton: HTMLButtonElement | null;
   private timer: number | null = null;
   private enabled = false;
@@ -110,13 +111,14 @@ export class TokenUsageWidget {
   private failure: string | null = null;
 
   constructor() {
-    this.panel = document.getElementById("plugin-widget")!;
-    this.hotzone = document.getElementById("plugin-hotzone")!;
-    this.body = document.getElementById("plugin-body")!;
-    this.updated = document.getElementById("plugin-updated")!;
-    this.refreshButton = document.getElementById("plugin-refresh") as HTMLButtonElement | null;
+    this.panel = document.getElementById("usage-modal")!;
+    this.handle = document.getElementById("rail-token-usage")!;
+    this.body = document.getElementById("usage-body")!;
+    this.updated = document.getElementById("usage-modal-updated")!;
+    this.headerChip = document.getElementById("header-usage")!;
+    this.refreshButton = document.getElementById("usage-refresh") as HTMLButtonElement | null;
 
-    this.bindToggle();
+    this.bindControls();
     this.refreshButton?.addEventListener("click", (event) => {
       event.stopPropagation();
       void this.refresh(true);
@@ -129,7 +131,7 @@ export class TokenUsageWidget {
     document.body.classList.toggle("token-usage-enabled", enabled);
 
     if (enabled) {
-      // Já busca os dados; o painel só abre no clique da alça.
+      // Já busca os dados; o modal só abre no clique do botão.
       void this.refresh(true);
       this.timer = window.setInterval(() => {
         if (!document.hidden) void this.refresh();
@@ -138,8 +140,35 @@ export class TokenUsageWidget {
       document.addEventListener("visibilitychange", this.onVisibility);
     } else {
       this.stop();
-      this.panel.classList.remove("visible");
+      this.hide();
+      this.headerChip.classList.add("hidden");
     }
+  }
+
+  /** Abre o modal (o botão do painel e o resumo do cabeçalho chamam isto). */
+  open(): void {
+    if (!this.enabled) {
+      document.dispatchEvent(
+        new CustomEvent("plugin-activate-request", { detail: "token-usage" }),
+      );
+      return;
+    }
+    document.dispatchEvent(
+      new CustomEvent("plugin-panel-opened", { detail: "token-usage" }),
+    );
+    this.panel.classList.remove("hidden");
+    if (!this.report || Date.now() - this.lastFetchAt > STALE_MS) {
+      void this.refresh(true);
+    }
+  }
+
+  hide(): void {
+    this.panel.classList.add("hidden");
+  }
+
+  private toggle(): void {
+    if (this.panel.classList.contains("hidden")) this.open();
+    else this.hide();
   }
 
   private readonly onVisibility = (): void => {
@@ -154,33 +183,30 @@ export class TokenUsageWidget {
     document.removeEventListener("visibilitychange", this.onVisibility);
   }
 
-  /** A alça abre e fecha o painel — sem hover, igual aos comandos rápidos. */
-  private bindToggle(): void {
-    const toggle = () => {
-      if (!this.enabled) return;
-      const open = !this.panel.classList.contains("visible");
-      if (open) {
-        document.dispatchEvent(
-          new CustomEvent("plugin-panel-opened", { detail: "token-usage" }),
-        );
-        this.panel.classList.add("visible");
-        if (Date.now() - this.lastFetchAt > STALE_MS) void this.refresh(true);
-      } else {
-        this.panel.classList.remove("visible");
-      }
-    };
-
-    this.hotzone.addEventListener("click", toggle);
-    this.hotzone.addEventListener("keydown", (event) => {
+  private bindControls(): void {
+    this.handle.addEventListener("click", () => this.toggle());
+    this.handle.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
-      toggle();
+      this.toggle();
     });
-    // Outro plugin abriu o painel dele? Recolhe este.
-    document.addEventListener("plugin-panel-opened", ((event: Event) => {
-      if ((event as CustomEvent<string>).detail !== "token-usage") {
-        this.panel.classList.remove("visible");
+    this.headerChip.addEventListener("click", () => this.open());
+    document
+      .getElementById("usage-modal-close")
+      ?.addEventListener("click", () => this.hide());
+    this.panel.addEventListener("mousedown", (event) => {
+      if (event.target === this.panel) this.hide();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !this.panel.classList.contains("hidden")) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.hide();
       }
+    });
+    // Outro plugin abriu o modal dele? Fecha este.
+    document.addEventListener("plugin-panel-opened", ((event: Event) => {
+      if ((event as CustomEvent<string>).detail !== "token-usage") this.hide();
     }) as EventListener);
   }
 
@@ -211,6 +237,7 @@ export class TokenUsageWidget {
         ? "atualizando…"
         : formatAgo(this.lastFetchAt, now)
       : "";
+    this.renderHeaderChip(now);
 
     if (this.failure) {
       this.body.appendChild(this.message(this.failure, "usage-error"));
@@ -234,9 +261,64 @@ export class TokenUsageWidget {
       return;
     }
 
+    const grid = document.createElement("div");
+    grid.className = "usage-grid";
     for (const agent of installed) {
-      this.body.appendChild(this.renderAgent(agent, now));
+      grid.appendChild(this.renderAgent(agent, now));
     }
+    this.body.appendChild(grid);
+  }
+
+  /** Resumo compacto no cabeçalho: "Claude 5h 370k · 7d 4,6M". */
+  private renderHeaderChip(now: number): void {
+    this.headerChip.innerHTML = "";
+    if (!this.enabled || this.failure || !this.report) {
+      this.headerChip.classList.add("hidden");
+      return;
+    }
+
+    const installed = this.report.agents.filter(
+      (agent) => agent.installed && !agent.error,
+    );
+    if (installed.length === 0) {
+      this.headerChip.classList.add("hidden");
+      return;
+    }
+
+    installed.slice(0, 2).forEach((agent, index) => {
+      if (index > 0) {
+        const sep = document.createElement("span");
+        sep.className = "usage-chip-sep";
+        sep.textContent = "|";
+        this.headerChip.appendChild(sep);
+      }
+
+      const name = document.createElement("span");
+      name.className = "usage-chip-agent";
+      name.textContent = agent.name.replace(/\s+Code$/, "");
+
+      const five = document.createElement("span");
+      five.className = "usage-chip-value";
+      five.textContent = `5h ${agent.fiveHours.total > 0 ? formatTokens(agent.fiveHours.total) : "0"}`;
+
+      const week = document.createElement("span");
+      week.className = "usage-chip-value";
+      week.textContent = `7d ${agent.week.total > 0 ? formatTokens(agent.week.total) : "0"}`;
+
+      this.headerChip.append(name, five, week);
+    });
+
+    this.headerChip.title = installed
+      .map(
+        (agent) =>
+          `${agent.name}: 5 h ${formatExact(agent.fiveHours.total)} tokens · semana ${formatExact(agent.week.total)} tokens`,
+      )
+      .join("\n");
+    this.headerChip.setAttribute(
+      "aria-label",
+      `Uso de tokens atualizado ${formatAgo(this.lastFetchAt, now)}`,
+    );
+    this.headerChip.classList.remove("hidden");
   }
 
   private renderAgent(agent: AgentUsage, now: number): HTMLElement {
