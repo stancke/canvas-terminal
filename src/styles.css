@@ -2026,28 +2026,6 @@ body.terminals-minimized #clickup-hotzone {
   display: none;
 }
 
-/* ---- Mini-mapa do canvas ---- */
-
-#minimap {
-  position: fixed;
-  right: 14px;
-  bottom: 34px;
-  z-index: 1000;
-  width: 180px;
-  height: 120px;
-  display: none;
-  border: 1px solid var(--window-border);
-  border-radius: 10px;
-  background: var(--window);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
-  opacity: 0.9;
-  pointer-events: none;
-}
-
-body.minimap-visible #minimap {
-  display: block;
-}
-
 #quick-panel {
   position: fixed;
   left: calc(var(--rail-w) + 26px);

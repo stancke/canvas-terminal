@@ -41,7 +41,6 @@ import {
 } from "./plugins";
 import { TokenUsageModal } from "./token-usage";
 import { ClickUpPlugin } from "./clickup";
-import { Minimap } from "./minimap";
 import {
   allActions,
   capture,
@@ -111,7 +110,6 @@ let pluginSettings: PluginSettings = { enabled: {} };
 let tokenUsageModal: TokenUsageModal | null = null;
 let clickUpPlugin: ClickUpPlugin | null = null;
 let gitPanel: GitPanel | null = null;
-let minimap: Minimap | null = null;
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 let workspaces: Workspace[] = [];
@@ -164,11 +162,9 @@ async function main(): Promise<void> {
   });
 
   canvas = new Canvas("#viewport", "#world");
-  minimap = new Minimap(canvas);
   canvas.onEmptyContextMenu = showEmptyContextMenu;
   canvas.onViewChange = () => {
     updateStatus();
-    minimap?.update();
     persist();
   };
 
@@ -190,7 +186,6 @@ async function main(): Promise<void> {
   );
   // Abrir outro modal fecha o Git (e vice-versa pelo botão do Git).
   document.addEventListener("plugin-panel-opened", () => gitPanel?.close());
-  document.addEventListener("canvas-terminals-changed", () => minimap?.update());
 
   // Atalho flutuante de diff do Git no modo maximizado (canto superior direito).
   const gitDiffHotzone = document.getElementById("git-diff-hotzone")!;
@@ -2987,7 +2982,6 @@ function resetZoom(): void {
 
 function updateStatus(): void {
   syncMaximizedView();
-  minimap?.update();
   ui.zoom.textContent = `${Math.round(canvas.zoom * 100)}%`;
   const count = canvas.getAllTerminals().length;
   ui.count.textContent = String(count);
@@ -3008,9 +3002,6 @@ function syncMaximizedView(): void {
   // maximizado (os dois modos não coexistem).
   const minimized = !maximized && all.some((terminal) => terminal.element.classList.contains("minimized"));
   document.body.classList.toggle("terminals-minimized", minimized);
-  // Mini-mapa visível no modo normal e no modo minimizado, desde que haja
-  // pelo menos um terminal e nenhum terminal esteja maximizado.
-  minimap?.setVisible(!maximized && all.length > 0);
 
   if (changed) {
     document.body.classList.toggle("terminal-maximized", maximized);
