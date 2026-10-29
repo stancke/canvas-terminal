@@ -98,6 +98,22 @@ function clampTerminalZoom(value: number): number {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value));
 }
 
+/** Últimas divergências de geometria (diagnóstico, sem dados sensíveis). */
+const GEOMETRY_LOG_KEY = "canvas-terminal.debug.geometry.v1";
+
+function recordGeometryMismatch(entry: Record<string, unknown>): void {
+  try {
+    const raw = localStorage.getItem(GEOMETRY_LOG_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    const log: unknown[] = Array.isArray(parsed) ? parsed : [];
+    log.push({ at: new Date().toISOString(), ...entry });
+    while (log.length > 20) log.shift();
+    localStorage.setItem(GEOMETRY_LOG_KEY, JSON.stringify(log));
+  } catch {
+    // Diagnóstico é best-effort: nunca atrapalha o uso do terminal.
+  }
+}
+
 /** Janela em que um onData do xterm ainda conta como digitação do usuário. */
 const USER_INPUT_WINDOW_MS = 40;
 /**
@@ -164,6 +180,8 @@ export class TerminalWindow {
   private resizeTimer: ReturnType<typeof setTimeout> | null = null;
   private fitThrottle: ReturnType<typeof setTimeout> | null = null;
   private startupTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Mantém a grade do xterm colada no tamanho real da janela. */
+  private sizeObserver?: ResizeObserver;
   private lastCols = 0;
   private lastRows = 0;
   private currentFontSize = BASE_FONT_SIZE;
@@ -258,6 +276,11 @@ export class TerminalWindow {
     this.term.loadAddon(this.serializeAddon);
 
     this.term.open(this.termBody);
+    // Qualquer mudança de tamanho da janela (troca de área, maximizar, zoom,
+    // recolher o painel) precisa refazer colunas/linhas do xterm; sem isso o
+    // TUI continua desenhando na largura antiga.
+    this.sizeObserver = new ResizeObserver(() => this.scheduleFit());
+    this.sizeObserver.observe(this.element);
     this.search = new TerminalSearch(this.term, () => this.term.focus());
     this.element.appendChild(this.search.element);
     registerPathLinks(
@@ -575,6 +598,8 @@ export class TerminalWindow {
       clearInterval(this.cwdTimer);
       this.cwdTimer = null;
     }
+    this.sizeObserver?.disconnect();
+    this.sizeObserver = undefined;
   }
 
   /** Reescreve o histórico da sessão anterior antes da saída do novo shell. */
@@ -774,11 +799,22 @@ export class TerminalWindow {
     this.element.classList.toggle("maximized", this.maximized);
     // Uma janela maximizada acompanha o viewport também quando o zoom muda.
     if (this.maximized) {
-      const rect = this.canvas.worldRectVisible();
-      this.x = rect.x;
-      this.y = rect.y;
-      this.w = rect.w;
-      this.h = Math.max(80, rect.h);
+      // Posição medida no DOM (não no pan): se a transformação do mundo ficar
+      // defasada por qualquer motivo, a janela continua colada no viewport.
+      const vp = this.canvas.viewport.getBoundingClientRect();
+      const world = this.canvas.world.getBoundingClientRect();
+      if (vp.width > 0 && vp.height > 0) {
+        this.x = (vp.left - world.left) / zoom;
+        this.y = (vp.top - world.top) / zoom;
+        this.w = vp.width / zoom;
+        this.h = Math.max(80, vp.height / zoom);
+      } else {
+        const rect = this.canvas.worldRectVisible();
+        this.x = rect.x;
+        this.y = rect.y;
+        this.w = rect.w;
+        this.h = Math.max(80, rect.h);
+      }
     }
     this.element.style.left = `${this.x * zoom}px`;
     this.element.style.top = `${this.y * zoom}px`;
@@ -803,6 +839,51 @@ export class TerminalWindow {
     // Fonte nova → colunas/linhas novas. O fit imediato evita o “pulo”.
     this.refit();
     this.onChange?.();
+  }
+
+  /**
+   * Garante que a janela maximizada cubra exatamente o viewport.
+   *
+   * Se o webview mudar de tamanho sem evento (ou uma troca de área deixar a
+   * geometria antiga), sobra uma faixa de canvas embaixo da janela — clicar
+   * nela tira o foco do terminal. Quando a medida não bate, a geometria é
+   * refeita e o problema fica registrado em `localStorage` para diagnóstico.
+   */
+  syncMaximizedSize(): void {
+    if (this.disposed || !this.maximized || !this.element.isConnected) return;
+    const off = this.viewportOffset();
+    if (!off) return;
+    recordGeometryMismatch({
+      title: this.title,
+      ...off,
+      transform: getComputedStyle(this.canvas.world).transform,
+      pan: [this.canvas.panX, this.canvas.panY],
+      attached: this.canvas.getTerminal(this.id) === this,
+      inline: [this.element.style.left, this.element.style.top],
+      zoom: this.canvas.zoom,
+      zoomLocked: this.canvas.zoomLocked,
+      terminalZoom: this.zoom,
+      body: document.body.className,
+    });
+    // Reaplica a transformação do mundo junto com as janelas: uma delas pode
+    // ter ficado defasada em relação ao pan.
+    this.canvas.renderNow();
+  }
+
+  /** Diferença (px) entre a janela maximizada e o viewport, ou `null`. */
+  private viewportOffset(): Record<string, unknown> | null {
+    const el = this.element.getBoundingClientRect();
+    const vp = this.canvas.viewport.getBoundingClientRect();
+    const diff = {
+      window: [el.left, el.top, el.width, el.height].map(Math.round),
+      viewport: [vp.left, vp.top, vp.width, vp.height].map(Math.round),
+    };
+    const off =
+      Math.abs(el.width - vp.width) > 1 ||
+      Math.abs(el.height - vp.height) > 1 ||
+      Math.abs(el.left - vp.left) > 1 ||
+      Math.abs(el.top - vp.top) > 1;
+    return off ? diff : null;
   }
 
   /**

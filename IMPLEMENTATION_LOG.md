@@ -309,3 +309,32 @@ Pendência honesta: o build Linux não foi validado nesta máquina (decisão do 
 ## Ajuste — Ctrl+roda dentro do terminal maximizado
 
 `src/terminal-window.ts`: o xterm trata a roda no próprio elemento (rolagem do buffer) antes do evento chegar ao canvas, então `Ctrl+roda` sobre o terminal rolava o conteúdo em vez de ampliar. Um listener em fase de captura em `.term-window` intercepta `Ctrl+roda` quando a janela está maximizada (`preventDefault` + `stopPropagation`) e aplica o fator ao `zoom` do próprio terminal; a roda sem `Ctrl` continua rolando o xterm normalmente e, fora do modo maximizado, `Ctrl+roda` continua ampliando a área. Verificado em Chrome headless com roda real sobre o corpo do terminal: maximizado 1.1 no terminal em foco e 1 no outro; roda sem `Ctrl` não mudou o zoom; restaurado, `Ctrl+roda` voltou a dar zoom na área (110%). `npx tsc --noEmit` e `npm run build` passaram.
+
+## Correção — janela maximizada fora do tamanho do viewport ao trocar de aba
+
+Sintoma: ao clicar numa aba de outra área com um terminal maximizado, a janela abria com o tamanho antigo (deixando uma faixa de canvas clicável embaixo, que tirava o foco do terminal) e o TUI continuava desenhando na largura anterior.
+
+- `src/canvas.ts`: `ResizeObserver` no viewport — recolher/expandir o painel, mudar a barra de status ou o tamanho da janela agora re-renderiza as janelas (antes só `window.resize` disparava).
+- `src/terminal-window.ts`: `ResizeObserver` na própria janela agenda `fit()` do xterm, então colunas/linhas acompanham qualquer mudança de tamanho (era isso que deixava o Claude Code desenhando torto depois do resize).
+- `src/main.ts`: `updateStatus()` re-renderiza a janela maximizada a cada mudança de estado (troca de aba/área, foco, zoom) e `refreshMaximizedGeometry()` passou a aplicar a geometria de forma síncrona, sem depender de um frame de `requestAnimationFrame`.
+
+Verificação (Chrome headless, perfil real exportado do app): maximizar e trocar entre as abas Docker → Claude → Vpn → Lazygit manteve a janela maximizada exatamente no viewport (1920×978); redimensionar a janela para 1000×620 e 1600×1000 reajustou a janela e a grade do xterm (visor 978 → 510 → 900). `npx tsc --noEmit` e `npm run build` passaram.
+
+## Correção — janela maximizada fora do viewport (rede de segurança + diagnóstico)
+
+O sintoma continuou após o ajuste por observers, então o app passou a conferir a geometria ativamente:
+
+- `src/terminal-window.ts`: novo `syncMaximizedSize()` compara a caixa da janela maximizada com a do viewport (tolerância de 1 px) e, quando divergem, registra o caso em `canvas-terminal.debug.geometry.v1` (janela, viewport, zoom do canvas, `zoomLocked`, zoom do terminal, classes do `body`) e refaz `render()` + `fit()`.
+- `src/main.ts`: verificação a cada 500 ms percorrendo os terminais de todas as áreas. Cobre qualquer caminho em que o webview mude de tamanho sem evento (o caso do WebKitGTK que não foi reproduzido no Chrome) e também a geodésia antiga vinda de uma troca de área.
+
+Verificação: com a janela maximizada em 1920×978, forçar o tamanho antigo (1587×808) no elemento fez o app registrar a divergência e restaurar 1920×978 em menos de 1 s. `npx tsc --noEmit` e `npm run build` passaram.
+
+## Correção definitiva — janela maximizada deslocada (65 px) do viewport
+
+O log de diagnóstico do app real mostrou que **tamanho estava certo** e só a **posição** divergia: janela em `top = -25` com viewport em `top = 40`. Ou seja, o elemento havia sido posicionado com um pan (`top = -panY`) que não correspondia mais à transformação aplicada em `#world` — `syncMaximizedSize()` refazia o `render()` a partir do pan e reproduzia o mesmo deslocamento a cada verificação.
+
+- `src/terminal-window.ts` (`render`): quando maximizada, a geometria passa a ser medida no DOM (`viewport` vs. `world`, ambos com `getBoundingClientRect`) em vez de calculada a partir do pan. Assim a janela fica colada no viewport mesmo que a transformação do mundo esteja defasada; o cálculo pelo pan ficou só como fallback (viewport com tamanho zero).
+- `src/terminal-window.ts` (`syncMaximizedSize`): ao detectar divergência, registra também `transform` do mundo, `pan`, `attached` e os `left/top` inline, e chama o novo `Canvas.renderNow()` (reaplica transformação + janelas de forma síncrona) em vez de re-renderizar só o terminal.
+- `src/canvas.ts`: novo `renderNow()` público.
+
+Verificação: com o mundo forçado a `translate(0, 65px)` e o pan em 0, a janela maximizada se manteve em `top = 40` (igual ao viewport) e o caso foi registrado com `transform`, `pan` e `attached`; forçar tamanho 1587×808 também foi corrigido. Troca de aba/área em área com zoom 83% continua com a janela exatamente no viewport. `npx tsc --noEmit` e `npm run build` passaram.

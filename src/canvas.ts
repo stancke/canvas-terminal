@@ -58,6 +58,7 @@ export class Canvas {
   private heldPanKeys = new Set<string>();
   private keyPanRaf: number | null = null;
   private lastKeyPanTime = 0;
+  private viewportObserver: ResizeObserver;
 
   onEmptyContextMenu?: (point: Point) => void;
   /** Avisa o app que pan/zoom mudaram (atualiza o indicador do menu). */
@@ -75,6 +76,11 @@ export class Canvas {
     this.viewport = viewport as HTMLElement;
     this.world = world as HTMLElement;
     this.snapGuides = new SnapGuideOverlay(this.viewport);
+
+    // O viewport muda de tamanho sem `window.resize` (painel recolhido, barra
+    // de status): re-renderiza para que as janelas maximizadas acompanhem.
+    this.viewportObserver = new ResizeObserver(() => this.requestRender());
+    this.viewportObserver.observe(this.viewport);
 
     this.bindEvents();
     this.updateGrid();
@@ -232,6 +238,11 @@ export class Canvas {
       this.rafPending = false;
       this.render();
     });
+  }
+
+  /** Aplica transformação e geometria agora, sem esperar o próximo frame. */
+  renderNow(): void {
+    this.render();
   }
 
   private render(): void {

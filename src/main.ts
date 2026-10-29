@@ -193,6 +193,15 @@ async function main(): Promise<void> {
   // zoom próprio do terminal em foco.
   canvas.onLockedZoom = (factor) => changeZoom(factor);
 
+  // Rede de segurança da geometria: se o viewport mudar de tamanho sem evento
+  // (ou uma troca de área deixar a janela com a medida antiga), realinha a
+  // janela maximizada em vez de deixar uma faixa de canvas clicável embaixo.
+  setInterval(() => {
+    for (const workspace of workspaces) {
+      for (const terminal of workspace.terminals) terminal.syncMaximizedSize();
+    }
+  }, 500);
+
   shells = await listShells();
   initShellSelection();
 
@@ -3252,6 +3261,9 @@ function changeZoom(factor: number): void {
 function updateStatus(): void {
   syncMaximizedView();
   const maximized = maximizedTerminal();
+  // A janela maximizada precisa caber no viewport agora: troca de área, abas,
+  // recolher o painel e zoom podem ter mudado o tamanho útil sem outro render.
+  if (maximized) maximized.render(canvas.zoom);
   const zoom = maximized ? maximized.zoom : canvas.zoom;
   ui.zoom.textContent = `${Math.round(zoom * 100)}%`;
   const count = canvas.getAllTerminals().length;
@@ -3306,6 +3318,11 @@ function syncMaximizedView(): void {
 
 /** Re-renderiza o canvas e reajusta o xterm após mudanças de geometria. */
 function refreshMaximizedGeometry(): void {
+  // Síncrono: a janela maximizada não pode ficar um frame no tamanho antigo
+  // (o que deixava uma faixa de canvas clicável por baixo dela).
+  for (const terminal of canvas.getAllTerminals()) {
+    if (terminal.maximized) terminal.render(canvas.zoom);
+  }
   canvas.requestRender();
   requestAnimationFrame(() => {
     for (const terminal of canvas.getAllTerminals()) {
