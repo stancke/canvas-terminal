@@ -821,13 +821,16 @@ export class TerminalWindow {
     this.element.style.width = `${this.w * zoom}px`;
     this.element.style.height = `${this.h * zoom}px`;
     // Maximizado, cada terminal tem o seu zoom: a janela continua preenchendo
-    // o viewport (usando o zoom da área, travado em 100%), mas fonte e cromo
-    // acompanham o zoom próprio daquele terminal.
-    const effectiveZoom = this.maximized ? this.zoom : zoom;
+    // o viewport (usando o zoom da área, travado em 100%), mas fonte e corpo
+    // acompanham o zoom próprio daquele terminal. A barra de abas do cabeçalho
+    // fica sempre em 100% — só o conteúdo do terminal é ampliado.
+    const chromeZoom = this.maximized ? 1 : zoom;
+    const contentZoom = this.maximized ? this.zoom : zoom;
     // Todo o cromo da janela (barra de título, controles, paddings) escala
     // junto com a fonte do xterm: o zoom é uniforme, sem reflow do terminal.
-    this.element.style.setProperty("--z", String(effectiveZoom));
-    this.applyFontSize(effectiveZoom);
+    this.element.style.setProperty("--z", String(chromeZoom));
+    this.element.style.setProperty("--tz", String(contentZoom));
+    this.applyFontSize(contentZoom);
   }
 
   /** Ajusta o zoom próprio do terminal maximizado (25% a 300%). */

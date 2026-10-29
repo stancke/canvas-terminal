@@ -338,3 +338,9 @@ O log de diagnóstico do app real mostrou que **tamanho estava certo** e só a *
 - `src/canvas.ts`: novo `renderNow()` público.
 
 Verificação: com o mundo forçado a `translate(0, 65px)` e o pan em 0, a janela maximizada se manteve em `top = 40` (igual ao viewport) e o caso foi registrado com `transform`, `pan` e `attached`; forçar tamanho 1587×808 também foi corrigido. Troca de aba/área em área com zoom 83% continua com a janela exatamente no viewport. `npx tsc --noEmit` e `npm run build` passaram.
+
+## Ajuste — barra de abas do modo maximizado não acompanha o zoom do terminal
+
+`src/terminal-window.ts` e `src/styles.css`: o zoom próprio do terminal maximizado estava aplicado no `--z`, que escala todo o cromo (barra de abas, controles, fontes). Agora `render()` separa os dois níveis: `--z` fica em 1 quando maximizado (cabeçalho sempre em 100%) e o novo `--tz` recebe o zoom do terminal, usado pelo `padding` do `.term-body` e pela largura da barra de rolagem do xterm; a fonte continua vindo de `applyFontSize()`. Fora do modo maximizado `--z` e `--tz` continuam iguais ao zoom da área.
+
+Verificado no Chrome headless: maximizado em 110%/121%/133%, a barra de abas ficou em 28 px com fonte de 11 px enquanto a fonte do xterm foi de 13 px a 17,3 px e o padding do corpo acompanhou; ao restaurar e aplicar 110% na área, o cromo voltou a escalar (barra em 30,8 px). `npx tsc --noEmit` e `npm run build` passaram.

@@ -1724,7 +1724,7 @@ body.terminal-maximized #rail-toggle {
   flex: 1;
   position: relative;
   overflow: hidden;
-  padding: calc(4px * var(--z, 1));
+  padding: calc(4px * var(--tz, 1));
 }
 
 .term-overlay {
@@ -2330,9 +2330,9 @@ body.terminal-maximized #rail-quick {
   font-family: var(--font-mono) !important;
 }
 
-/* A barra de rolagem acompanha o zoom, como o restante da janela. */
+/* A barra de rolagem acompanha o zoom do conteúdo do terminal. */
 .xterm .xterm-scrollable-element > .scrollbar.vertical {
-  width: calc(14px * var(--z, 1)) !important;
+  width: calc(14px * var(--tz, 1)) !important;
 }
 
 .term-window.minimized .term-body {
