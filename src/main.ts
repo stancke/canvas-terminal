@@ -189,6 +189,9 @@ async function main(): Promise<void> {
     updateStatus();
     persist();
   };
+  // Maximizado o zoom do canvas fica travado; Ctrl+roda passa a ajustar o
+  // zoom próprio do terminal em foco.
+  canvas.onLockedZoom = (factor) => changeZoom(factor);
 
   shells = await listShells();
   initShellSelection();
@@ -337,6 +340,8 @@ async function createTerminalForWorkspace(
     workspace.lastFocusedId = id;
     const index = workspace.terminals.findIndex((entry) => entry.id === id);
     if (index >= 0) workspace.focusedIndex = index;
+    // Cada aba maximizada tem o seu zoom: o indicador do cabeçalho acompanha.
+    updateStatus();
   };
   terminal.onClose = () => {
     workspace.terminals = workspace.terminals.filter((entry) => entry !== terminal);
@@ -1965,6 +1970,7 @@ async function instantiateWorkspace(workspace: Workspace): Promise<void> {
         item.startupCommand,
         {
           sessionId: item.sessionId,
+          zoom: item.zoom,
           // Com comando de inicialização o terminal se reconstrói sozinho
           // (ex.: `claude --continue`): o histórico antigo só poluiria a tela.
           restoreScrollback:
@@ -1985,6 +1991,7 @@ async function instantiateWorkspace(workspace: Workspace): Promise<void> {
           h: item.geom.h,
           maximized: false,
           minimized: false,
+          zoom: item.geom.zoom ?? item.zoom ?? 1,
           startupCommand: item.geom.startupCommand ?? item.startupCommand,
         };
         terminal.maximized = true;
@@ -2043,7 +2050,8 @@ async function showWorkspace(
   // A transmissão vale só para a área onde foi ligada.
   if (activeWorkspace !== workspace) setBroadcast(false);
   activeWorkspace = workspace;
-  // Cada área tem o seu zoom. No modo maximizado ele é sempre 100%.
+  // Cada área tem o seu zoom. Maximizado, o canvas fica em 100% e quem tem
+  // zoom próprio é o terminal.
   const maximizedMode = !forceNormal && workspaceIsMaximized(workspace);
   canvas.zoomLocked = maximizedMode;
   canvas.setView(
@@ -3043,12 +3051,12 @@ function bindGlobalShortcuts(): void {
       }
       if (matches(e, "zoom-in")) {
         own();
-        canvas.zoomBy(1.1);
+        changeZoom(1.1);
         return;
       }
       if (matches(e, "zoom-out")) {
         own();
-        canvas.zoomBy(1 / 1.1);
+        changeZoom(1 / 1.1);
         return;
       }
       if (mod && e.key === "Tab") {
@@ -3213,20 +3221,48 @@ function centerView(): void {
 }
 
 function resetZoom(): void {
+  const maximized = maximizedTerminal();
+  if (maximized) {
+    maximized.setZoom(1);
+    updateStatus();
+    return;
+  }
   canvas.setZoomAtCenter(1);
+}
+
+/** Terminal ocupando a tela (modo maximizado), se houver. */
+function maximizedTerminal(): TerminalWindow | null {
+  return canvas.getAllTerminals().find((terminal) => terminal.maximized) ?? null;
+}
+
+/**
+ * Cada terminal maximizado tem o seu zoom; fora do modo maximizado o zoom é o
+ * da área (canvas). Ctrl+= / Ctrl+- / Ctrl+0 e Ctrl+roda passam por aqui.
+ */
+function changeZoom(factor: number): void {
+  const maximized = maximizedTerminal();
+  if (maximized) {
+    maximized.setZoom(maximized.zoom * factor);
+    updateStatus();
+    return;
+  }
+  canvas.zoomBy(factor);
 }
 
 function updateStatus(): void {
   syncMaximizedView();
-  ui.zoom.textContent = `${Math.round(canvas.zoom * 100)}%`;
+  const maximized = maximizedTerminal();
+  const zoom = maximized ? maximized.zoom : canvas.zoom;
+  ui.zoom.textContent = `${Math.round(zoom * 100)}%`;
   const count = canvas.getAllTerminals().length;
   ui.count.textContent = String(count);
   ui.countLabel.textContent = count === 1 ? "terminal" : "terminais";
 }
 
 /**
- * O modo maximizado ocupa todo o viewport com zoom 100%; ao restaurar, cada
- * área volta ao zoom que tinha no modo normal.
+ * O modo maximizado ocupa todo o viewport com o canvas travado em 100%; o
+ * zoom aparece no indicador, mas é o zoom próprio do terminal. Ao restaurar,
+ * cada área volta ao zoom que tinha no modo normal.
  */
 function syncMaximizedView(): void {
   const all = canvas.getAllTerminals();
@@ -3244,7 +3280,8 @@ function syncMaximizedView(): void {
     closeAppMenu();
 
     if (maximized) {
-      // Guarda o zoom normal antes de exibir o terminal maximizado em 100%.
+      // Guarda o zoom normal antes de maximizar: a janela ocupa o viewport e o
+      // zoom da área fica reservado para quando ela for restaurada.
       if (activeWorkspace && canvas.zoom !== 1) {
         activeWorkspace.view.zoom = canvas.zoom;
       }
@@ -3292,8 +3329,8 @@ function trackMouseCoordinates(): void {
 
 function persist(): void {
   if (!activeWorkspace) return;
-  // No modo maximizado o zoom exibido é 100%, mas o zoom normal da área deve
-  // ser preservado para quando ela for restaurada.
+  // Maximizado o canvas fica em 100% (quem tem zoom é o terminal), mas o zoom
+  // normal da área deve ser preservado para quando ela for restaurada.
   const keepZoom =
     canvas.zoomLocked ||
     workspaceIsMaximized(activeWorkspace) ||

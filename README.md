@@ -143,10 +143,11 @@ da tela cheia use **F11**, o botão **⛶** no menu ou o item
 
 O zoom é **por área de trabalho**: cada área guarda o seu próprio nível e ele é
 restaurado ao trocar de área. Janelas, barra de título, controles e o texto dos
-terminais escalam juntos, sem reflow do conteúdo. No **modo maximizado** o
-terminal é sempre exibido em **100%** (e os atalhos de zoom ficam travados); ao
-restaurar, a área volta ao zoom que tinha. Vá de 25% a 300% com `Ctrl + roda do
-mouse`, `Ctrl+=` / `Ctrl+-` ou pelo menu **Exibir**.
+terminais escalam juntos, sem reflow do conteúdo. No **modo maximizado** cada
+terminal (aba) tem o **seu próprio zoom**: use `Ctrl + roda do mouse`,
+`Ctrl+=` / `Ctrl+-` ou `Ctrl+0` para ajustar só o terminal que está na tela — o
+nível fica salvo no perfil e volta na próxima vez que ele for maximizado. Ao
+restaurar, a área volta ao zoom que tinha. Vá de 25% a 300%.
 
 Para navegar sem o mouse, clique em uma área vazia do canvas e use **WASD** ou
 as **setas** (segure para pan contínuo). Ainda nesse modo, **Q** e **E** trocam
@@ -421,8 +422,8 @@ O token é guardado no `localStorage` do app (`canvas-terminal.clickup.v1`) e s�
 | `Ctrl+Shift+W` (ou `Cmd+Shift+W`) | Fechar terminal em foco (funciona com o terminal focado) |
 | `Ctrl+W` com o terminal em foco | Vai para o shell (apaga a palavra anterior); fora dele, fecha o terminal |
 | `Ctrl+PageDown` / `Ctrl+PageUp` | Ciclar foco entre terminais |
-| `Ctrl+0` (ou `Cmd+0`) | Resetar zoom (100%, ancorado no centro) |
-| `Ctrl+=` / `Ctrl+-` | Aumentar / diminuir o zoom |
+| `Ctrl+0` (ou `Cmd+0`) | Resetar zoom do terminal maximizado ou, fora dele, da área (100%, ancorado no centro) |
+| `Ctrl+=` / `Ctrl+-` | Aumentar / diminuir o zoom do terminal maximizado ou da área |
 | `F11` | Alternar tela cheia (só sai por aqui ou pelo menu) |
 | `Ctrl+Shift+F` | Buscar no terminal em foco |
 | `Ctrl+Shift+B` | Ligar/desligar a transmissão de entrada (broadcast) |
@@ -437,7 +438,7 @@ O token é guardado no `localStorage` do app (`canvas-terminal.clickup.v1`) e s�
 | `Botão do meio` / `botão direito` | Pan do canvas |
 | `WASD` / setas | Navegar no canvas (clique antes em uma área vazia) |
 | `Q` / `E` | Trocar para a área de trabalho anterior/seguinte (modo navegação) |
-| `Ctrl + roda do mouse` | Zoom no cursor |
+| `Ctrl + roda do mouse` | Zoom no cursor (maximizado: zoom do terminal em foco) |
 | `Shift + roda do mouse` | Pan horizontal |
 
 ---

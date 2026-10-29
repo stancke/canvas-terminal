@@ -62,6 +62,11 @@ export class Canvas {
   onEmptyContextMenu?: (point: Point) => void;
   /** Avisa o app que pan/zoom mudaram (atualiza o indicador do menu). */
   onViewChange?: () => void;
+  /**
+   * Chamado quando o zoom está travado (modo maximizado) e o usuário tenta
+   * ampliar com Ctrl+roda. O app aplica o fator ao terminal maximizado.
+   */
+  onLockedZoom?: (factor: number) => void;
 
   constructor(viewportSelector: string, worldSelector: string) {
     const viewport = document.querySelector(viewportSelector);
@@ -317,6 +322,12 @@ export class Canvas {
       // Zoom multiplicativo: cada passo mantém a mesma sensação em qualquer
       // nível (de 25% a 300%).
       const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      // Maximizado o canvas fica travado em 100%: o gesto vale para o zoom
+      // próprio do terminal que está ocupando a tela.
+      if (this.zoomLocked) {
+        this.onLockedZoom?.(factor);
+        return;
+      }
       this.zoomAt(e.clientX, e.clientY, this.zoom * factor);
     } else {
       e.preventDefault();

@@ -27,6 +27,8 @@ export interface SavedTerminal {
   title: string;
   maximized: boolean;
   minimized: boolean;
+  /** Zoom próprio do terminal quando maximizado (padrão 100%). */
+  zoom?: number;
   /** Comando executado automaticamente quando o terminal abrir. */
   startupCommand: string;
   /** Identifica o terminal entre execuções (chave do histórico salvo). */
@@ -73,6 +75,7 @@ export function toSavedTerminal(state: TerminalState): SavedTerminal {
     title: state.title,
     maximized: state.maximized,
     minimized: state.minimized,
+    zoom: state.zoom,
     startupCommand: state.startupCommand,
     sessionId: state.sessionId,
     geom: state.savedGeom ? toSavedTerminal(state.savedGeom) : undefined,
@@ -124,6 +127,10 @@ function parseTerminals(value: unknown): SavedTerminal[] {
       title: typeof t.title === "string" ? t.title : "",
       maximized: t.maximized === true,
       minimized: t.minimized === true,
+      zoom:
+        typeof t.zoom === "number" && Number.isFinite(t.zoom) && t.zoom > 0
+          ? t.zoom
+          : 1,
       startupCommand:
         typeof t.startupCommand === "string" ? t.startupCommand : "",
       sessionId:

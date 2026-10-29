@@ -11,7 +11,7 @@ import {
   writeTerminal,
   type PtyEvent,
 } from "./pty";
-import { Canvas } from "./canvas";
+import { Canvas, MAX_ZOOM, MIN_ZOOM } from "./canvas";
 import { installColorReporting, type ColorReporting } from "./osc-colors";
 import { getTheme, onThemeChange, terminalPalette } from "./theme";
 import { TerminalSearch } from "./terminal-search";
@@ -33,6 +33,8 @@ export interface TerminalState {
   h: number;
   maximized: boolean;
   minimized: boolean;
+  /** Zoom próprio do terminal quando ele está maximizado. */
+  zoom: number;
   /** Comando executado automaticamente quando o terminal abrir. */
   startupCommand: string;
   /** Identifica o terminal entre execuções (chave do histórico salvo). */
@@ -45,6 +47,8 @@ export interface TerminalSessionOptions {
   sessionId?: string;
   /** Histórico serializado (ANSI) da sessão anterior. */
   restoreScrollback?: string;
+  /** Zoom próprio do terminal no modo maximizado (restaurado do perfil). */
+  zoom?: number;
 }
 
 /** Referência a um terminal exibido nas abas do cabeçalho maximizado. */
@@ -87,8 +91,13 @@ const BASE_FONT_SIZE = 13;
 const CWD_POLL_MS = 5000;
 /** Linhas de histórico guardadas por terminal (reduzidas se passar do teto). */
 const SCROLLBACK_SAVE_LINES = 1000;
-/** Espera antes de esvaziar a textarea do xterm após uma composição. */
-const COMPOSITION_CLEAR_MS = 50;
+
+/** Limites do zoom próprio de um terminal maximizado. */
+function clampTerminalZoom(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value));
+}
+
 /** Janela em que um onData do xterm ainda conta como digitação do usuário. */
 const USER_INPUT_WINDOW_MS = 40;
 /**
@@ -121,6 +130,11 @@ export class TerminalWindow {
   w: number;
   h: number;
   maximized = false;
+  /**
+   * Zoom próprio do terminal no modo maximizado. No modo normal o zoom da
+   * área vale para todos; maximizado, cada terminal (aba) usa o seu.
+   */
+  zoom = 1;
   savedGeom?: TerminalState;
   /** Comando a executar automaticamente quando o terminal for aberto. */
   startupCommand = "";
@@ -190,6 +204,7 @@ export class TerminalWindow {
   ) {
     this.canvas = canvas;
     this.sessionId = session.sessionId || newSessionId();
+    this.zoom = clampTerminalZoom(session.zoom ?? 1);
     this.id = id;
     this.shellId = shellId;
     this.cwd = cwd;
@@ -442,36 +457,61 @@ export class TerminalWindow {
   }
 
   /**
-   * Evita que acentos (teclas mortas/IME) reenviem texto já digitado.
+   * Mantém a textarea oculta do xterm vazia fora das composições.
    *
-   * O xterm lê a textarea oculta para saber o que a composição produziu e,
-   * em alguns casos, reenvia o conteúdo inteiro dela. Com o WebKitGTK a
-   * textarea guarda texto antigo e a palavra anterior reaparecia no terminal.
-   * Esvaziá-la depois de cada composição elimina o resíduo.
+   * No WebKitGTK a textarea guarda o texto que o xterm já enviou ao shell.
+   * Ao compor com tecla morta (ABNT2), o CompositionHelper relê a textarea
+   * desde o `compositionstart` e a palavra anterior reaparece no terminal.
+   * Limpar a textarea depois de cada tecla — quando o xterm já a leu — remove
+   * esse resíduo e a composição passa a enviar só o caractere novo.
    */
   private guardComposition(): void {
     const textarea = this.term.textarea;
     if (!textarea) return;
     let composing = false;
-    let typedSince = false;
     let clearTimer: ReturnType<typeof setTimeout> | null = null;
 
+    const clearLater = () => {
+      if (clearTimer) clearTimeout(clearTimer);
+      // setTimeout 0: o xterm lê a textarea em timers de mesmo atraso
+      // agendados antes deste (keydown/compositionend), então a limpeza roda
+      // depois da leitura.
+      clearTimer = setTimeout(() => {
+        clearTimer = null;
+        if (this.disposed || composing) return;
+        if (textarea.value) textarea.value = "";
+      }, 0);
+    };
+
+    textarea.addEventListener(
+      "keydown",
+      (event) => {
+        const ev = event as KeyboardEvent;
+        // Tecla morta/IME ainda vai compor: o conteúdo da textarea é a
+        // própria composição em andamento.
+        if (ev.isComposing || ev.key === "Dead" || ev.keyCode === 229) return;
+        clearLater();
+      },
+      true,
+    );
+    textarea.addEventListener(
+      "input",
+      (event) => {
+        if (composing || (event as InputEvent).isComposing) return;
+        clearLater();
+      },
+      true,
+    );
     textarea.addEventListener("compositionstart", () => {
       composing = true;
-      if (clearTimer) clearTimeout(clearTimer);
-    });
-    textarea.addEventListener("keydown", () => {
-      typedSince = true;
+      if (clearTimer) {
+        clearTimeout(clearTimer);
+        clearTimer = null;
+      }
     });
     textarea.addEventListener("compositionend", () => {
       composing = false;
-      typedSince = false;
-      if (clearTimer) clearTimeout(clearTimer);
-      // Espera o xterm ler a textarea (setTimeout 0) antes de limpar; se outra
-      // tecla ou composição chegar nesse intervalo, deixa para a próxima vez.
-      clearTimer = setTimeout(() => {
-        if (!composing && !typedSince && !this.disposed) textarea.value = "";
-      }, COMPOSITION_CLEAR_MS);
+      clearLater();
     });
   }
 
@@ -730,10 +770,25 @@ export class TerminalWindow {
     this.element.style.top = `${this.y * zoom}px`;
     this.element.style.width = `${this.w * zoom}px`;
     this.element.style.height = `${this.h * zoom}px`;
+    // Maximizado, cada terminal tem o seu zoom: a janela continua preenchendo
+    // o viewport (usando o zoom da área, travado em 100%), mas fonte e cromo
+    // acompanham o zoom próprio daquele terminal.
+    const effectiveZoom = this.maximized ? this.zoom : zoom;
     // Todo o cromo da janela (barra de título, controles, paddings) escala
     // junto com a fonte do xterm: o zoom é uniforme, sem reflow do terminal.
-    this.element.style.setProperty("--z", String(zoom));
-    this.applyFontSize(zoom);
+    this.element.style.setProperty("--z", String(effectiveZoom));
+    this.applyFontSize(effectiveZoom);
+  }
+
+  /** Ajusta o zoom próprio do terminal maximizado (25% a 300%). */
+  setZoom(value: number): void {
+    const next = clampTerminalZoom(value);
+    if (next === this.zoom) return;
+    this.zoom = next;
+    this.render(this.canvas.zoom);
+    // Fonte nova → colunas/linhas novas. O fit imediato evita o “pulo”.
+    this.refit();
+    this.onChange?.();
   }
 
   /**
@@ -1051,6 +1106,7 @@ export class TerminalWindow {
       h: this.h,
       maximized: false,
       minimized: false,
+      zoom: this.zoom,
       startupCommand: this.startupCommand,
     };
   }
@@ -1193,6 +1249,7 @@ export class TerminalWindow {
       sessionId: this.sessionId,
       maximized: this.maximized,
       minimized: this.element.classList.contains("minimized"),
+      zoom: this.zoom,
       startupCommand: this.startupCommand,
       savedGeom: this.savedGeom,
     };

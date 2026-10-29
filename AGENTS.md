@@ -62,6 +62,11 @@ Instalação local com atalho (Linux):
 5. **Janela sem moldura**: `decorations: false` em `tauri.conf.json`. Minimizar,
    maximizar e fechar são desenhados pela UI; qualquer mudança de layout do
    cabeçalho precisa preservar esses controles e as alças de redimensionamento.
+6. **IME/teclas mortas (ABNT2) no WebKitGTK**: a textarea oculta do xterm
+   acumula o texto já enviado e o `CompositionHelper` relê tudo, duplicando a
+   palavra anterior. `guardComposition()` em `terminal-window.ts` limpa a
+   textarea depois de cada tecla (timers de 0 ms, depois das leituras do xterm)
+   e nunca durante a composição. Mexer nisso reabre o bug dos acentos.
 
 ## Mapa do código
 
@@ -72,7 +77,8 @@ Frontend (`src/`):
   global passam por aqui.
 - `canvas.ts` — viewport infinito (pan/zoom/grade), conversão de coordenadas.
 - `terminal-window.ts` — janela do terminal (xterm), abas, drag/resize, overlay
-  de saída, maximizado, indicador de atividade.
+  de saída, maximizado, indicador de atividade e zoom próprio do terminal
+  maximizado (`zoom`, independente do zoom da área).
 - `pty.ts` — ponte com o backend (`invoke`/`listen`, dados em base64).
 - `persistence.ts` — formato e gravação do perfil (com migração do layout antigo).
 - `theme.ts` — catálogo de temas, paleta ANSI do xterm, persistência e
