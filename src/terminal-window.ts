@@ -611,6 +611,20 @@ export class TerminalWindow {
       if (!e.ctrlKey) e.stopPropagation();
     });
 
+    // Maximizado, Ctrl+roda é o zoom do próprio terminal. O xterm também
+    // escuta a roda (para rolar o buffer), então interceptamos na fase de
+    // captura: sem isso o conteúdo rola em vez de ampliar.
+    this.element.addEventListener(
+      "wheel",
+      (e) => {
+        if (!e.ctrlKey || !this.maximized) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this.setZoom(this.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+      },
+      { capture: true, passive: false },
+    );
+
     this.element.addEventListener("contextmenu", (e) => {
       if ((e.target as HTMLElement).closest(".term-titlebar")) {
         e.preventDefault();
