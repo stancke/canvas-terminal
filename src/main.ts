@@ -486,34 +486,6 @@ function renderThemeMenu(): void {
       menu.appendChild(button);
     }
   }
-
-  const separator = document.createElement("div");
-  separator.className = "theme-separator";
-  menu.appendChild(separator);
-
-  const more = document.createElement("button");
-  more.type = "button";
-  more.className = "theme-option";
-  more.setAttribute("role", "menuitem");
-  const moreIcon = document.createElement("span");
-  moreIcon.className = "theme-swatch";
-  moreIcon.style.setProperty("--swatch-bg", "transparent");
-  moreIcon.style.setProperty("--swatch-surface", "var(--bg)");
-  moreIcon.style.setProperty("--swatch-accent", "var(--accent)");
-  moreIcon.textContent = "+";
-  moreIcon.style.display = "flex";
-  moreIcon.style.alignItems = "center";
-  moreIcon.style.justifyContent = "center";
-  moreIcon.style.fontSize = "11px";
-  const moreLabel = document.createElement("span");
-  moreLabel.className = "theme-name";
-  moreLabel.textContent = "Obter mais temas...";
-  more.append(moreIcon, moreLabel);
-  more.addEventListener("click", () => {
-    closeThemeMenu();
-    openSettings("appearance");
-  });
-  menu.appendChild(more);
 }
 
 function syncThemeUi(): void {
