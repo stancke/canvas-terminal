@@ -294,3 +294,8 @@ Pendência honesta: o build Linux não foi validado nesta máquina (decisão do 
 ## Ajuste — sem histórico em terminais com comando de inicialização
 
 `src/main.ts`: terminais com `startupCommand` não gravam nem restauram histórico (o comando os reconstrói; o quadro antigo de TUIs como o Claude Code só poluía a tela). A pasta continua sendo restaurada, e históricos já salvos desses terminais são descartados no próximo salvamento. README atualizado. `npx tsc --noEmit` e `npm run build` passaram.
+
+## Ajuste — acentos duplicando texto e seletor de temas
+
+1. **Seletor de temas** (`src/main.ts`): removido o item **Obter mais temas...** e o separador dele.
+2. **Acentos** (`src/terminal-window.ts`): `guardComposition` esvazia a textarea oculta do xterm 50 ms depois de cada `compositionend` (se não houver nova composição nem tecla no intervalo). O `CompositionHelper` do xterm relê essa textarea e, com resíduo e eventos fora de ordem (IME do WebKitGTK), reenviava o texto anterior. Verificação em Chrome headless com composição simulada via CDP (`´`+á, `~`+ã, `^`+ê intercalados com letras): saída `ola áxãxêx` e textarea vazia. O defeito original depende do IME do WebKitGTK e não foi reproduzido; precisa ser confirmado no app instalado.

@@ -87,6 +87,8 @@ const BASE_FONT_SIZE = 13;
 const CWD_POLL_MS = 5000;
 /** Linhas de histórico guardadas por terminal (reduzidas se passar do teto). */
 const SCROLLBACK_SAVE_LINES = 1000;
+/** Espera antes de esvaziar a textarea do xterm após uma composição. */
+const COMPOSITION_CLEAR_MS = 50;
 /** Janela em que um onData do xterm ainda conta como digitação do usuário. */
 const USER_INPUT_WINDOW_MS = 40;
 /**
@@ -248,6 +250,7 @@ export class TerminalWindow {
       () => this.currentCwd || this.cwd,
       (message) => warnClipboard(message),
     );
+    this.guardComposition();
     this.bindCwdTracking();
     if (session.restoreScrollback) this.restoreScrollback(session.restoreScrollback);
     // Responde às consultas de paleta para que TUIs (OpenCode, etc.) sigam o
@@ -435,6 +438,40 @@ export class TerminalWindow {
       }
       const encoder = new TextEncoder();
       await writeTerminal(this.id, encoder.encode(data));
+    });
+  }
+
+  /**
+   * Evita que acentos (teclas mortas/IME) reenviem texto já digitado.
+   *
+   * O xterm lê a textarea oculta para saber o que a composição produziu e,
+   * em alguns casos, reenvia o conteúdo inteiro dela. Com o WebKitGTK a
+   * textarea guarda texto antigo e a palavra anterior reaparecia no terminal.
+   * Esvaziá-la depois de cada composição elimina o resíduo.
+   */
+  private guardComposition(): void {
+    const textarea = this.term.textarea;
+    if (!textarea) return;
+    let composing = false;
+    let typedSince = false;
+    let clearTimer: ReturnType<typeof setTimeout> | null = null;
+
+    textarea.addEventListener("compositionstart", () => {
+      composing = true;
+      if (clearTimer) clearTimeout(clearTimer);
+    });
+    textarea.addEventListener("keydown", () => {
+      typedSince = true;
+    });
+    textarea.addEventListener("compositionend", () => {
+      composing = false;
+      typedSince = false;
+      if (clearTimer) clearTimeout(clearTimer);
+      // Espera o xterm ler a textarea (setTimeout 0) antes de limpar; se outra
+      // tecla ou composição chegar nesse intervalo, deixa para a próxima vez.
+      clearTimer = setTimeout(() => {
+        if (!composing && !typedSince && !this.disposed) textarea.value = "";
+      }, COMPOSITION_CLEAR_MS);
     });
   }
 
