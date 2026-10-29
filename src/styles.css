@@ -885,6 +885,7 @@ body.clickup-enabled #rail-clickup {
 }
 
 /* No modo maximizado o ClickUp vira alça flutuante à direita. */
+body.rail-collapsed #rail-clickup,
 body.terminal-maximized #rail-clickup {
   display: none;
 }
@@ -1643,7 +1644,7 @@ body.terminal-maximized #rail-toggle {
   line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
-  cursor: grab;
+  cursor: default;
   touch-action: none;
 }
 
@@ -1966,6 +1967,7 @@ body.terminal-maximized #rail-toggle {
 
 /* Modo maximizado: ícones da lateral direita centralizados verticalmente.
    Ordem de cima para baixo: ClickUp, comandos rápidos, diff do Git. */
+body.rail-collapsed #quick-hotzone,
 body.terminal-maximized #quick-hotzone {
   left: auto;
   right: 0;
@@ -1977,18 +1979,21 @@ body.terminal-maximized #quick-hotzone {
   border-radius: 8px 0 0 8px;
 }
 
+body.rail-collapsed #git-diff-hotzone,
 body.terminal-maximized #git-diff-hotzone {
   display: flex;
   top: 50%;
   margin-top: 18px;
 }
 
+body.rail-collapsed #clickup-hotzone,
 body.terminal-maximized #clickup-hotzone {
   display: flex;
   top: 50%;
   margin-top: -132px;
 }
 
+body.rail-collapsed #quick-panel,
 body.terminal-maximized #quick-panel {
   left: auto;
   right: 26px;
@@ -1998,31 +2003,23 @@ body.terminal-maximized #quick-panel {
   transform: translateX(calc(100% + 24px));
 }
 
+body.rail-collapsed #quick-panel.visible,
 body.terminal-maximized #quick-panel.visible {
   transform: translateX(0);
 }
 
-/* Modo com terminais minimizados: comandos rápidos e ClickUp aparecem no
-   painel lateral, acima do botão de uso de tokens. As alças flutuantes somem
-   para não competir com os botões do painel. */
-body.terminals-minimized #rail-quick {
+/* Com o painel lateral visível, comandos rápidos ficam no rail, acima do
+   ClickUp. Recolhido (ou maximizado), viram alças à direita. */
+body:not(.rail-collapsed):not(.terminal-maximized) #rail-quick {
   display: flex;
-  opacity: 0.85;
-  color: var(--text);
 }
 
-body.terminals-minimized #rail-quick:hover,
-body.terminals-minimized #rail-quick:focus-visible {
-  opacity: 1;
-  background: var(--hover);
-}
-
-body.terminals-minimized #quick-hotzone,
-body.terminals-minimized #clickup-hotzone {
+body:not(.rail-collapsed):not(.terminal-maximized) #quick-hotzone {
   display: none;
 }
 
-#rail-quick {
+body.rail-collapsed #rail-quick,
+body.terminal-maximized #rail-quick {
   display: none;
 }
 
@@ -4527,4 +4524,277 @@ body.terminal-maximized .app-menu {
   .settings-tab {
     width: auto;
   }
+}
+
+/* ---- Busca no terminal (Ctrl+Shift+F) ---- */
+
+.term-search {
+  position: absolute;
+  top: calc(28px * var(--z, 1) + 6px);
+  right: 14px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  color: var(--text);
+  background: var(--window);
+  border: 1px solid var(--window-border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-menu);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+.term-search.hidden {
+  display: none;
+}
+
+.term-search-input {
+  width: 170px;
+  padding: 3px 6px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--window-border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.term-search-input:focus {
+  border-color: var(--accent-dim);
+}
+
+.term-search-input.no-match {
+  border-color: var(--danger);
+}
+
+.term-search-count {
+  min-width: 38px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: center;
+}
+
+.term-search-btn {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.term-search-btn:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.term-search-btn.on {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+/* ---- Broadcast de entrada ---- */
+
+.term-controls .term-broadcast {
+  display: none;
+}
+
+body.broadcast-on .term-controls .term-broadcast {
+  display: flex;
+}
+
+.term-controls .term-broadcast svg {
+  width: 80%;
+  height: 80%;
+}
+
+.term-controls .term-broadcast.on {
+  color: var(--accent);
+  background: var(--hover);
+}
+
+.term-window.broadcasting {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+#broadcast-badge {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+#broadcast-badge.hidden {
+  display: none;
+}
+
+/* ---- Layouts ---- */
+
+.layouts-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.layouts-modal.hidden {
+  display: none;
+}
+
+.layouts-card {
+  width: min(640px, calc(100vw - 48px));
+}
+
+#layouts-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+#layouts-close:hover {
+  color: var(--text);
+}
+
+.layouts-body h4 {
+  margin: 14px 0 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.layouts-intro {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.layouts-empty {
+  color: var(--text-muted);
+}
+
+.layout-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.layout-item {
+  position: relative;
+}
+
+.layout-apply {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--window-border);
+  border-radius: 8px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.layout-apply:hover,
+.layout-apply:focus-visible {
+  border-color: var(--accent-dim);
+  outline: none;
+}
+
+.layout-preview {
+  position: relative;
+  display: block;
+  height: 64px;
+  margin-bottom: 4px;
+  background: var(--grid);
+  border-radius: 4px;
+}
+
+.layout-preview i {
+  position: absolute;
+  box-sizing: border-box;
+  background: var(--window);
+  border: 1px solid var(--accent-dim);
+  border-radius: 2px;
+}
+
+.layout-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layout-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.layout-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  color: var(--text-muted);
+  background: var(--window);
+  border: 1px solid var(--window-border);
+  border-radius: 4px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.layout-remove:hover {
+  color: white;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+.layouts-save {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.layouts-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+.layouts-save-btn {
+  align-self: flex-end;
+  padding: 5px 12px;
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border: none;
+  border-radius: 5px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.layouts-save-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }

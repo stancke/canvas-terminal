@@ -105,3 +105,28 @@ export async function killTerminal(id: number): Promise<void> {
 export async function isTerminalAlive(id: number): Promise<boolean> {
   return invoke<boolean>("pty_alive", { id });
 }
+
+/** Pasta atual do shell (só o Linux informa; nas demais plataformas é `null`). */
+export async function terminalCwd(id: number): Promise<string | null> {
+  return invoke<string | null>("pty_cwd", { id });
+}
+
+export interface ResolvedPath {
+  path: string;
+  is_dir: boolean;
+  line: number | null;
+  column: number | null;
+}
+
+/** Resolve um caminho exibido no terminal; `null` quando ele não existe. */
+export async function resolvePath(
+  path: string,
+  cwd: string,
+): Promise<ResolvedPath | null> {
+  return invoke<ResolvedPath | null>("resolve_path", { path, cwd: cwd || null });
+}
+
+/** Abre arquivo/pasta no aplicativo padrão do sistema. */
+export async function openPath(path: string): Promise<void> {
+  return invoke("open_path", { path });
+}

@@ -318,6 +318,10 @@
               <span class="menu-label">Organizar terminais</span>
               <span class="menu-shortcut">Ctrl+Shift+O</span>
             </button>
+            <button class="menu-item" id="menu-layouts" role="menuitem">
+              <span class="menu-label">Layouts...</span>
+              <span class="menu-shortcut">Ctrl+Shift+Y</span>
+            </button>
             <button class="menu-item" id="menu-cycle" role="menuitem">
               <span class="menu-label">Próximo terminal</span>
               <span class="menu-shortcut">Ctrl+PageDown</span>
@@ -330,6 +334,14 @@
               <span class="menu-label">Minimizar terminal</span>
             </button>
             <div class="menu-separator"></div>
+            <button class="menu-item" id="menu-search" role="menuitem">
+              <span class="menu-label">Buscar no terminal</span>
+              <span class="menu-shortcut">Ctrl+Shift+F</span>
+            </button>
+            <button class="menu-item" id="menu-broadcast" role="menuitem">
+              <span class="menu-label">Transmitir entrada (broadcast)</span>
+              <span class="menu-shortcut">Ctrl+Shift+B</span>
+            </button>
             <button class="menu-item" id="menu-startup-command" role="menuitem">
               <span class="menu-label">Comando de inicialização...</span>
             </button>
@@ -378,6 +390,23 @@
           <button id="dialog-cancel" type="button">Cancelar</button>
           <button id="dialog-confirm" type="button">Confirmar</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Layouts: arranjos de terminais prontos ou salvos pelo usuário. -->
+    <div
+      id="layouts-modal"
+      class="layouts-modal hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="layouts-title"
+    >
+      <div class="dialog-card layouts-card">
+        <div class="dialog-header">
+          <span id="layouts-title">Layouts</span>
+          <button id="layouts-close" type="button" title="Fechar (Esc)">×</button>
+        </div>
+        <div id="layouts-body" class="dialog-body layouts-body"></div>
       </div>
     </div>
 
@@ -662,6 +691,7 @@
 
     <footer id="statusbar">
       <span id="coords">0, 0</span>
+      <span id="broadcast-badge" class="hidden" role="status"></span>
       <span id="hint">Clique no canvas: WASD/setas navegam • Q/E trocam de área • Ctrl+roda zoom</span>
     </footer>
   </body>

@@ -59,11 +59,17 @@ A janela será aberta com a toolbar, canvas infinito e um terminal inicial no ce
 
 ## Build / empacotamento
 
+> **Atenção:** o build de release precisa da feature `custom-protocol`, que
+> embute o `dist/` no binário. Sem ela, o executável abre em modo dev e mostra
+> **"Could not connect to localhost: Connection refused"** ao procurar o Vite em
+> `http://localhost:1420`. Use `--features custom-protocol` (ou `npm run tauri
+> build`, que já passa a flag).
+
 ### Windows
 
 ```bash
 npm run build
-cd src-tauri && cargo build
+cd src-tauri && cargo build --release --features custom-protocol
 ```
 
 Para gerar o instalador (NSIS/MSI):
@@ -78,7 +84,7 @@ Os instaladores ficarão em `src-tauri/target/release/bundle/` (subpastas `nsis/
 
 ```bash
 npm run build
-cd src-tauri && cargo build
+cd src-tauri && cargo build --release --features custom-protocol
 ```
 
 Para gerar os pacotes (`.deb`, `.rpm`, `.AppImage`):
@@ -88,6 +94,22 @@ npm run tauri build
 ```
 
 Os pacotes ficarão em `src-tauri/target/release/bundle/` (subpastas `deb/`, `rpm/` e `appimage/`).
+
+### Instalação local (Linux, com atalho na área de trabalho)
+
+O script `tools/install.sh` compila, guarda um backup do binário anterior em
+`~/.local/bin`, instala a versão nova e (re)cria o atalho da área de trabalho e
+o item de menu:
+
+```bash
+./tools/install.sh               # build completo + instalação
+./tools/install.sh --skip-build  # reaproveita o binário já compilado
+./tools/install.sh --no-shortcut # só instala o binário
+```
+
+O atalho executa `~/.local/bin/canvas-terminal`, então nas próximas atualizações
+basta rodar o script de novo — o caminho não muda. Feche o aplicativo antes de
+instalar: o Linux não deixa sobrescrever um binário em execução.
 
 ---
 
@@ -116,7 +138,7 @@ esquerdo**:
 
 Use **Exibir → Tela cheia** (`F11`) para esconder o cabeçalho, a barra de status
 e a barra de tarefas do sistema. O painel lateral continua disponível. Para sair
-da tela cheia use **F11**/`Ctrl+Shift+F`, o botão **⛶** no menu ou o item
+da tela cheia use **F11**, o botão **⛶** no menu ou o item
 **Exibir → Sair da tela cheia**; `Esc` não sai do fullscreen.
 
 O zoom é **por área de trabalho**: cada área guarda o seu próprio nível e ele é
@@ -211,6 +233,69 @@ em foco para você confirmar.
 - Para remover um comando, clique em `×`.
 - Os comandos ficam salvos em `localStorage["canvas-terminal.quick-commands.v1"]`.
 - Em tela cheia o painel continua disponível no mesmo canto.
+
+---
+
+## Busca, links, sessão, broadcast e layouts
+
+### Busca no terminal
+
+`Ctrl+Shift+F` (ou **Janela → Buscar no terminal**) abre uma barra sobre o
+terminal em foco. Digite para destacar as ocorrências (contador `n/total`);
+`Enter` vai para a próxima, `Shift+Enter` para a anterior, `Esc` fecha. Os
+botões **Aa** e **.\*** alternam maiúsculas/minúsculas e expressão regular. Se
+houver texto selecionado, ele vira o termo inicial. A busca varre o histórico
+inteiro do terminal, não só a parte visível.
+
+### Links clicáveis
+
+`Ctrl`+clique (ou `Cmd`+clique) abre:
+
+- **URLs** (`http://`, `https://`) no navegador padrão;
+- **caminhos de arquivo** exibidos na saída (`src/main.ts:42:7`, `./README.md`,
+  `~/projeto`) no aplicativo padrão do sistema. Só viram link os caminhos que
+  existem; os relativos são resolvidos a partir da pasta atual do terminal. O
+  número da linha é ignorado ao abrir.
+
+### Persistir e restaurar a sessão
+
+Ao reabrir o app, cada terminal volta **na pasta em que estava** e mostra o
+**histórico da sessão anterior** (até 1000 linhas por terminal), separado da
+nova saída por `── sessão anterior ──`. Os processos em execução não são
+retomados: cada terminal abre um shell novo.
+- Terminais com **comando de inicialização** (ex.: `claude --continue`) não
+  restauram histórico — só a pasta —, porque o comando já os reconstrói.
+
+- A pasta atual vem de `/proc/<pid>/cwd` no Linux e do OSC 7 (`file://`)
+  enviado pelo shell nas demais plataformas.
+- O histórico é gravado a cada 20 s, ao salvar (`Ctrl+S`), ao sair e ao ocultar
+  a janela, em `localStorage["canvas-terminal.scrollback.v1"]`. TUIs (tela
+  alternativa) não são gravadas.
+- Como o histórico pode conter dados sensíveis, dá para desligar em
+  **Configurações → Terminal → Restaurar histórico dos terminais** (desligar
+  apaga o que estava salvo).
+
+### Broadcast de entrada
+
+`Ctrl+Shift+B` (ou **Janela → Transmitir entrada**) liga a transmissão na área
+atual (precisa de ao menos dois terminais). Tudo que você digitar ou colar num
+terminal participante vai também aos demais, inclusive os comandos rápidos.
+Participantes ficam com borda tracejada e um ícone de antena na barra de título,
+que inclui/exclui o terminal; a barra de status mostra quantos recebem. Trocar
+de área desliga a transmissão.
+
+### Layouts
+
+`Ctrl+Shift+Y` (ou **Janela → Layouts...**) abre os arranjos de terminais:
+
+- **Modelos**: lado a lado, empilhado, três colunas, principal + 2 e grade 2×2.
+- **Meus layouts**: **Salvar o arranjo atual** guarda posição e tamanho
+  (proporcionais) de todas as janelas da área e, opcionalmente, shell, pasta e
+  comando de inicialização de cada uma. Salvos em
+  `localStorage["canvas-terminal.layouts.v1"]`.
+
+Aplicar um layout reposiciona os terminais abertos (na ordem em que existem) e
+abre os que faltarem. Nenhum terminal é fechado.
 
 ---
 
@@ -338,7 +423,10 @@ O token é guardado no `localStorage` do app (`canvas-terminal.clickup.v1`) e s�
 | `Ctrl+PageDown` / `Ctrl+PageUp` | Ciclar foco entre terminais |
 | `Ctrl+0` (ou `Cmd+0`) | Resetar zoom (100%, ancorado no centro) |
 | `Ctrl+=` / `Ctrl+-` | Aumentar / diminuir o zoom |
-| `F11` / `Ctrl+Shift+F` | Alternar tela cheia (só sai por aqui ou pelo menu) |
+| `F11` | Alternar tela cheia (só sai por aqui ou pelo menu) |
+| `Ctrl+Shift+F` | Buscar no terminal em foco |
+| `Ctrl+Shift+B` | Ligar/desligar a transmissão de entrada (broadcast) |
+| `Ctrl+Shift+Y` | Abrir os layouts |
 | `Esc` | Fechar menu, modal ou diálogo |
 | `Ctrl+,` (ou `Cmd+,`) | Abrir as configurações |
 | `Ctrl+Shift+L` (ou `Cmd+Shift+L`) | Abrir o seletor de temas |
@@ -379,6 +467,12 @@ As cores da interface ficam em variáveis CSS em `src/styles.css`, uma por
 `dark`/`light` são migrados para `one-dark`/`one-light`. A janela usa moldura
 própria (`decorations: false`), então o cabeçalho também desenha os controles de
 minimizar, maximizar e fechar.
+
+O terminal também **responde às consultas de paleta** (OSC 4/10/11/12) com as
+cores do tema atual (`src/osc-colors.ts`) e **avisa mudanças de esquema de
+cores** (modo 2031). Assim TUIs que derivam as cores do terminal — como o
+OpenCode com `theme.name: "system"` — acompanham o tema escolhido no app, inclusive
+ao trocá-lo com o terminal aberto, em vez de usar um tema próprio fixo.
 
 ## Inicialização automática
 
@@ -433,6 +527,9 @@ Preferências independentes do perfil:
 - `localStorage["canvas-terminal.git-folder.v1"]` — pasta rastreada pelo painel
   do Git.
 - `localStorage["canvas-terminal.theme.v1"]` — tema escolhido no cabeçalho.
+- `localStorage["canvas-terminal.scrollback.v1"]` — histórico dos terminais por
+  sessão; `canvas-terminal.restore-history.v1` liga/desliga a restauração.
+- `localStorage["canvas-terminal.layouts.v1"]` — layouts salvos pelo usuário.
 - `localStorage["canvas-terminal.plugins.v1"]` — plugins ligados/desligados.
 - `localStorage["canvas-terminal.shell.v1"]` — shell padrão dos novos terminais.
 - Inicialização automática — estado do sistema operacional
@@ -524,6 +621,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools/limpar-conhosts-orfaos.ps1
 - `src/main.ts` — bootstrap da UI
 - `src/canvas.ts` — viewport infinito (pan/zoom/grid)
 - `src/terminal-window.ts` — janela de terminal com xterm.js
+- `src/osc-colors.ts` — respostas às consultas de cor do terminal (OSC 4/10/11/12) e aviso de troca de tema (modo 2031)
+- `src/shortcuts.ts` — atalhos editáveis e persistência das combinações
 - `src/pty.ts` — wrapper do backend Tauri
 - `src/persistence.ts` — salvamento de layout
 - `src/workspace-icons.ts` — ícones e cores das áreas de trabalho
@@ -540,6 +639,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools/limpar-conhosts-orfaos.ps1
 - `src-tauri/src/folders.rs` — navegação de pastas do seletor do Git
 - `src-tauri/tests/pty_test.rs` — teste de integração headless
 - `tools/limpar-conhosts-orfaos.ps1` — limpeza de hospedeiros ConPTY órfãos (Windows)
+- `tools/install.sh` — build + instalação local com atalho (Linux)
 
 ---
 

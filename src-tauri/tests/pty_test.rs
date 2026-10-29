@@ -6,9 +6,9 @@
 
 use base64::Engine;
 use canvas_terminal_lib::pty::{
-    pty_alive_internal as pty_alive, pty_kill_internal as pty_kill, pty_list_shells,
-    pty_resize_internal as pty_resize, pty_spawn_internal, pty_write_internal as pty_write,
-    PtyEvent, PtyState, Sink,
+    PtyEvent, PtyState, Sink, pty_alive_internal as pty_alive, pty_kill_internal as pty_kill,
+    pty_list_shells, pty_resize_internal as pty_resize, pty_spawn_internal,
+    pty_write_internal as pty_write,
 };
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -111,7 +111,10 @@ fn pty_integration() {
     // Mata a sessão.
     pty_kill(&state, id).expect("falha ao matar PTY");
     std::thread::sleep(Duration::from_millis(300));
-    assert!(!pty_alive(&state, id).unwrap(), "sessão deveria estar morta");
+    assert!(
+        !pty_alive(&state, id).unwrap(),
+        "sessão deveria estar morta"
+    );
 
     let _ = std::fs::remove_file(&shell_path);
 }
@@ -160,7 +163,10 @@ fn wait_for_output(
             for ev in vec.iter().filter(|e| e.id == id && e.kind == "data") {
                 if let Some(data) = &ev.data {
                     if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(data) {
-                        if decoded.windows(needle_bytes.len()).any(|w| w == needle_bytes) {
+                        if decoded
+                            .windows(needle_bytes.len())
+                            .any(|w| w == needle_bytes)
+                        {
                             return true;
                         }
                     }
@@ -170,4 +176,28 @@ fn wait_for_output(
         std::thread::sleep(Duration::from_millis(50));
     }
     false
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pty_cwd_reflete_a_pasta_do_shell() {
+    let state = PtyState::new();
+    let sink = TestSink {
+        events: Arc::new(Mutex::new(Vec::new())),
+    };
+    let dir = std::env::temp_dir().canonicalize().expect("tmp");
+    let shells = pty_list_shells().expect("shells");
+    let id = pty_spawn_internal(
+        &state,
+        sink,
+        Some(shells[0].id.clone()),
+        Some(dir.to_string_lossy().into_owned()),
+        80,
+        24,
+    )
+    .expect("spawn");
+
+    let cwd = canvas_terminal_lib::pty::pty_cwd_internal(&state, id).expect("cwd");
+    assert_eq!(cwd.map(std::path::PathBuf::from), Some(dir));
+    pty_kill(&state, id).ok();
 }

@@ -4,6 +4,7 @@ import { Canvas } from "./canvas";
 import {
   createTerminal,
   TerminalWindow,
+  type TerminalSessionOptions,
   type TerminalGroupReorderDetail,
   type TerminalTabGroup,
   type TerminalTabRef,
@@ -71,6 +72,15 @@ import {
   isWorkspaceIcon,
 } from "./workspace-icons";
 import { GitPanel } from "./git-panel";
+import { LayoutsPanel } from "./layouts-panel";
+import { captureLayout, slotRect, type SavedLayout } from "./layouts";
+import {
+  SCROLLBACK_MAX_CHARS,
+  isHistoryRestoreEnabled,
+  loadScrollbacks,
+  saveScrollbacks,
+  setHistoryRestoreEnabled,
+} from "./session-store";
 
 const DEFAULT_W = 720;
 const DEFAULT_H = 420;
@@ -79,6 +89,7 @@ const WORKSPACE_IMAGE_SIZE = 96;
 const WORKSPACE_IMAGE_MAX = 380_000;
 const RAIL_COLLAPSED_KEY = "canvas-terminal.rail-collapsed.v1";
 const SHELL_KEY = "canvas-terminal.shell.v1";
+const SCROLLBACK_SAVE_INTERVAL_MS = 20_000;
 
 interface Workspace {
   id: string;
@@ -110,6 +121,12 @@ let pluginSettings: PluginSettings = { enabled: {} };
 let tokenUsageModal: TokenUsageModal | null = null;
 let clickUpPlugin: ClickUpPlugin | null = null;
 let gitPanel: GitPanel | null = null;
+let layoutsPanel: LayoutsPanel | null = null;
+/** Histórico salvo dos terminais, por `sessionId` (ver session-store.ts). */
+let scrollbacks: Record<string, string> = {};
+/** Transmissão de entrada ligada: o que se digita vai a todos os participantes. */
+let broadcastOn = false;
+let layoutBusy = false;
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 let workspaces: Workspace[] = [];
@@ -147,6 +164,7 @@ async function main(): Promise<void> {
     try {
       persist();
       flushSave();
+      snapshotScrollbacks();
     } catch (err) {
       // Nunca deixa uma falha de persistência bloquear o fechamento.
       console.error("Falha ao salvar o perfil:", err);
@@ -160,6 +178,10 @@ async function main(): Promise<void> {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") saveSession();
   });
+
+  scrollbacks = isHistoryRestoreEnabled() ? loadScrollbacks() : {};
+  // O histórico muda o tempo todo: grava em intervalos, não a cada saída.
+  setInterval(snapshotScrollbacks, SCROLLBACK_SAVE_INTERVAL_MS);
 
   canvas = new Canvas("#viewport", "#world");
   canvas.onEmptyContextMenu = showEmptyContextMenu;
@@ -179,6 +201,20 @@ async function main(): Promise<void> {
   bindFullscreenWatcher();
   bindContextMenu();
   bindTitlebarContext();
+
+  layoutsPanel = new LayoutsPanel({
+    apply: (layout) => void applyLayout(layout),
+    capture: (name, details) => {
+      const layout = captureLayout(
+        name,
+        canvas.getAllTerminals().map((terminal) => terminal.getState()),
+        details,
+      );
+      if (layout) showToast(`Layout “${layout.name}” salvo`);
+      return layout;
+    },
+    terminalCount: () => canvas.getAllTerminals().length,
+  });
 
   gitPanel = new GitPanel(
     document.getElementById("git-modal")!,
@@ -287,9 +323,14 @@ async function createTerminalForWorkspace(
   w: number,
   h: number,
   startupCommand = "",
+  session: TerminalSessionOptions = {},
 ): Promise<TerminalWindow> {
-  const terminal = await createTerminal(canvas, shellId, cwd, title, x, y, w, h);
+  const terminal = await createTerminal(canvas, shellId, cwd, title, x, y, w, h, session);
   terminal.element.style.zIndex = String(++zCounter);
+  terminal.onUserInput = (id, data) => broadcastInput(id, data);
+  terminal.onBroadcastToggle = () => syncBroadcastBadge();
+  // Terminal novo numa área em transmissão entra na transmissão.
+  if (broadcastOn && workspace === activeWorkspace) terminal.setBroadcastMember(true);
 
   terminal.onFocus = (id) => {
     focusedTerminal = terminal;
@@ -312,6 +353,7 @@ async function createTerminalForWorkspace(
     );
     workspace.focusedIndex = focusedIndex >= 0 ? focusedIndex : undefined;
     renderWorkspaceRail();
+    syncBroadcastBadge();
     // Atualiza as abas agrupadas do terminal maximizado (inclusive grupos de
     // áreas que não estão ativas).
     notifyTerminalTabsChanged();
@@ -387,6 +429,7 @@ async function addTerminalToWorkspace(
   }
   persist();
   updateStatus();
+  syncBroadcastBadge();
   return terminal;
 }
 
@@ -873,8 +916,33 @@ function renderSettings(): void {
         </div>
         <p class="settings-status" id="settings-shell-status"></p>
       </div>
+      <div class="settings-panel">
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <span class="settings-row-title">Restaurar histórico dos terminais</span>
+            <span class="settings-row-desc">
+              Ao reabrir o app, cada terminal volta na pasta em que estava e
+              mostra o histórico da sessão anterior (os processos em execução
+              não são retomados). O histórico fica salvo neste computador e pode
+              conter dados sensíveis exibidos no terminal.
+            </span>
+          </div>
+          <label class="settings-toggle" title="Restaurar histórico dos terminais">
+            <input type="checkbox" id="settings-history" aria-label="Restaurar histórico dos terminais"
+              ${isHistoryRestoreEnabled() ? "checked" : ""} />
+            <span class="settings-toggle-track"></span>
+          </label>
+        </div>
+      </div>
     `;
     bindShellRow();
+    document.getElementById("settings-history")?.addEventListener("change", (event) => {
+      const enabled = (event.target as HTMLInputElement).checked;
+      setHistoryRestoreEnabled(enabled);
+      if (enabled) snapshotScrollbacks();
+      else scrollbacks = {};
+      showToast(enabled ? "Histórico dos terminais será restaurado" : "Histórico dos terminais apagado");
+    });
     return;
   }
 
@@ -1232,6 +1300,9 @@ function bindMenuActions(): void {
   on("menu-cycle", () => cycleFocus(1));
   on("menu-maximize", () => focusedTerminal?.toggleMaximize());
   on("menu-minimize", () => focusedTerminal?.toggleMinimize());
+  on("menu-layouts", () => openLayouts());
+  on("menu-search", () => openTerminalSearch());
+  on("menu-broadcast", () => setBroadcast(!broadcastOn));
   on("menu-startup-command", () => {
     if (focusedTerminal) editStartupCommand(focusedTerminal);
     else flashHint("Selecione um terminal para configurar o comando.");
@@ -1331,6 +1402,7 @@ async function quitApp(): Promise<void> {
   try {
     persist();
     flushSave();
+    snapshotScrollbacks();
   } catch (err) {
     console.error("Falha ao salvar o perfil antes de sair:", err);
   }
@@ -1354,6 +1426,168 @@ async function quitApp(): Promise<void> {
   } catch (err) {
     console.error("Falha ao fechar o aplicativo:", err);
     window.close();
+  }
+}
+
+/* ---- Busca, broadcast, layouts e histórico ---- */
+
+function openTerminalSearch(): void {
+  if (!focusedTerminal) {
+    flashHint("Clique em um terminal antes de buscar.");
+    return;
+  }
+  focusedTerminal.openSearch();
+}
+
+function openLayouts(): void {
+  closeAllMenus();
+  closeAppMenu();
+  layoutsPanel?.open();
+}
+
+/** Grava o histórico dos terminais alterados desde a última gravação. */
+function snapshotScrollbacks(): void {
+  if (!isHistoryRestoreEnabled()) return;
+  const next: Record<string, string> = {};
+  let changed = false;
+
+  for (const workspace of workspaces) {
+    if (!workspace.initialized) {
+      // Área ainda não aberta nesta sessão: preserva o histórico já salvo.
+      for (const item of workspace.pending) {
+        const saved =
+          item.sessionId && !item.startupCommand
+            ? scrollbacks[item.sessionId]
+            : undefined;
+        if (item.sessionId && saved) next[item.sessionId] = saved;
+      }
+      continue;
+    }
+    for (const terminal of workspace.terminals) {
+      // Terminais com comando de inicialização não guardam histórico.
+      if (terminal.startupCommand) continue;
+      let text = scrollbacks[terminal.sessionId];
+      if (terminal.scrollbackDirty) {
+        terminal.scrollbackDirty = false;
+        const fresh = terminal.serializeScrollback(SCROLLBACK_MAX_CHARS);
+        // `null` = tela alternativa (TUI) ou grande demais: mantém o anterior.
+        if (fresh !== null && fresh !== text) {
+          text = fresh;
+          changed = true;
+        }
+      }
+      if (text) next[terminal.sessionId] = text;
+    }
+  }
+
+  if (Object.keys(next).length !== Object.keys(scrollbacks).length) changed = true;
+  scrollbacks = next;
+  if (changed) saveScrollbacks(next);
+}
+
+/** Reenvia a digitação de um terminal aos demais participantes do broadcast. */
+function broadcastInput(sourceId: number, data: string): void {
+  if (!broadcastOn) return;
+  const targets = canvas.getAllTerminals().filter((terminal) => terminal.broadcastMember);
+  if (!targets.some((terminal) => terminal.id === sourceId)) return;
+  for (const terminal of targets) {
+    if (terminal.id !== sourceId) terminal.sendInput(data);
+  }
+}
+
+function syncBroadcastBadge(): void {
+  const badge = document.getElementById("broadcast-badge");
+  if (!badge) return;
+  const members = canvas
+    ? canvas.getAllTerminals().filter((terminal) => terminal.broadcastMember).length
+    : 0;
+  badge.classList.toggle("hidden", !broadcastOn);
+  badge.textContent = broadcastOn
+    ? `● Transmitindo para ${members} ${members === 1 ? "terminal" : "terminais"}`
+    : "";
+}
+
+function setBroadcast(on: boolean): void {
+  if (on === broadcastOn) return;
+  if (on && canvas.getAllTerminals().length < 2) {
+    flashHint("Abra ao menos dois terminais para transmitir a entrada.");
+    return;
+  }
+  broadcastOn = on;
+  document.body.classList.toggle("broadcast-on", on);
+  for (const terminal of canvas.getAllTerminals()) terminal.setBroadcastMember(on);
+  syncBroadcastBadge();
+  flashHint(
+    on
+      ? "Broadcast ligado: o que você digitar vai a todos os terminais marcados."
+      : "Broadcast desligado.",
+  );
+}
+
+/**
+ * Aplica um layout à área ativa: reposiciona os terminais abertos (na ordem em
+ * que existem) e abre os que faltam. Nenhum terminal é fechado.
+ */
+async function applyLayout(layout: SavedLayout): Promise<void> {
+  const workspace = activeWorkspace;
+  if (!workspace || layoutBusy) return;
+  layoutBusy = true;
+  try {
+    // Janelas maximizadas ou minimizadas escondiam o resultado.
+    for (const terminal of canvas.getAllTerminals()) {
+      if (terminal.maximized) terminal.toggleMaximize();
+    }
+    for (const terminal of canvas.getAllTerminals()) {
+      if (terminal.element.classList.contains("minimized")) terminal.toggleMinimize();
+    }
+
+    const area = canvas.worldRectVisible();
+    const existing = canvas.getAllTerminals();
+    let opened = 0;
+    for (const [index, slot] of layout.slots.entries()) {
+      const rect = slotRect(slot, area);
+      const terminal = existing[index];
+      if (terminal) {
+        terminal.x = rect.x;
+        terminal.y = rect.y;
+        terminal.w = rect.w;
+        terminal.h = rect.h;
+        terminal.savedGeom = undefined;
+        terminal.render(canvas.zoom);
+        terminal.refit();
+        continue;
+      }
+      const open = (shellId: string) =>
+        addTerminalToWorkspace(
+          workspace,
+          shellId,
+          rect.x,
+          rect.y,
+          rect.w,
+          rect.h,
+          slot.cwd || undefined,
+          slot.title || undefined,
+          slot.startupCommand || undefined,
+        );
+      try {
+        await open(slot.shell || selectedShell());
+      } catch {
+        // O shell salvo pode não existir nesta máquina: usa o padrão.
+        await open(selectedShell());
+      }
+      opened++;
+    }
+    persist();
+    updateStatus();
+    flashHint(
+      opened > 0
+        ? `Layout “${layout.name}” aplicado (${opened} novo${opened === 1 ? "" : "s"}).`
+        : `Layout “${layout.name}” aplicado.`,
+    );
+  } catch (error) {
+    flashHint(`Não foi possível aplicar o layout: ${error instanceof Error ? error.message : error}`);
+  } finally {
+    layoutBusy = false;
   }
 }
 
@@ -1757,6 +1991,15 @@ async function instantiateWorkspace(workspace: Workspace): Promise<void> {
         base.w,
         base.h,
         item.startupCommand,
+        {
+          sessionId: item.sessionId,
+          // Com comando de inicialização o terminal se reconstrói sozinho
+          // (ex.: `claude --continue`): o histórico antigo só poluiria a tela.
+          restoreScrollback:
+            item.sessionId && !item.startupCommand
+              ? scrollbacks[item.sessionId]
+              : undefined,
+        },
       );
       if (item.maximized && item.geom) {
         terminal.savedGeom = {
@@ -1825,6 +2068,8 @@ async function showWorkspace(
 ): Promise<void> {
   await instantiateWorkspace(workspace);
 
+  // A transmissão vale só para a área onde foi ligada.
+  if (activeWorkspace !== workspace) setBroadcast(false);
   activeWorkspace = workspace;
   // Cada área tem o seu zoom. No modo maximizado ele é sempre 100%.
   const maximizedMode = !forceNormal && workspaceIsMaximized(workspace);
@@ -2796,6 +3041,10 @@ function bindGlobalShortcuts(): void {
           own();
           return;
         }
+        if (layoutsPanel?.close()) {
+          own();
+          return;
+        }
         if (closeThemeMenu()) {
           own();
           return;
@@ -2897,6 +3146,21 @@ function bindGlobalShortcuts(): void {
       if (matches(e, "open-settings")) {
         own();
         if (!closeSettings()) openSettings("general");
+        return;
+      }
+      if (matches(e, "search-terminal")) {
+        own();
+        openTerminalSearch();
+        return;
+      }
+      if (matches(e, "toggle-broadcast")) {
+        own();
+        setBroadcast(!broadcastOn);
+        return;
+      }
+      if (matches(e, "open-layouts")) {
+        own();
+        if (!layoutsPanel?.close()) openLayouts();
         return;
       }
     },
@@ -3100,6 +3364,7 @@ function persist(): void {
 function saveNow(): void {
   persist();
   flushSave();
+  snapshotScrollbacks();
   showToast("Perfil salvo com sucesso");
 }
 

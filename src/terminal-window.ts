@@ -1,16 +1,25 @@
 import { Terminal } from "@xterm/xterm";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import {
   killTerminal,
   onPtyData,
   offPtyData,
   resizeTerminal,
   spawnTerminal,
+  terminalCwd,
   writeTerminal,
   type PtyEvent,
 } from "./pty";
 import { Canvas } from "./canvas";
-import { onThemeChange, terminalPalette } from "./theme";
+import { installColorReporting, type ColorReporting } from "./osc-colors";
+import { getTheme, onThemeChange, terminalPalette } from "./theme";
+import { TerminalSearch } from "./terminal-search";
+import {
+  isLinkActivation,
+  openExternalUrl,
+  registerPathLinks,
+} from "./terminal-links";
 import { snapMovingRect, snapResizingRect, type SnapRect } from "./snapping";
 
 export interface TerminalState {
@@ -26,7 +35,16 @@ export interface TerminalState {
   minimized: boolean;
   /** Comando executado automaticamente quando o terminal abrir. */
   startupCommand: string;
+  /** Identifica o terminal entre execuções (chave do histórico salvo). */
+  sessionId?: string;
   savedGeom?: TerminalState;
+}
+
+/** Dados de uma sessão anterior, usados ao restaurar o terminal. */
+export interface TerminalSessionOptions {
+  sessionId?: string;
+  /** Histórico serializado (ANSI) da sessão anterior. */
+  restoreScrollback?: string;
 }
 
 /** Referência a um terminal exibido nas abas do cabeçalho maximizado. */
@@ -65,6 +83,17 @@ const MIN_W = 240;
 const MIN_H = 140;
 /** Tamanho da fonte do terminal em zoom 100%. */
 const BASE_FONT_SIZE = 13;
+/** Intervalo para acompanhar a pasta atual do shell (usada ao restaurar). */
+const CWD_POLL_MS = 5000;
+/** Linhas de histórico guardadas por terminal (reduzidas se passar do teto). */
+const SCROLLBACK_SAVE_LINES = 1000;
+/** Janela em que um onData do xterm ainda conta como digitação do usuário. */
+const USER_INPUT_WINDOW_MS = 40;
+/**
+ * Após restaurar o histórico: desliga modos de mouse, teclas de aplicação e
+ * colagem protegida que o conteúdo antigo possa ter deixado ligados.
+ */
+const RESET_MODES = "\x1b[0m\x1b[?1l\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h";
 
 /** Exibe um aviso temporário na barra de status do app. */
 function warnClipboard(message: string): void {
@@ -93,8 +122,21 @@ export class TerminalWindow {
   savedGeom?: TerminalState;
   /** Comando a executar automaticamente quando o terminal for aberto. */
   startupCommand = "";
+  /** Identifica o terminal entre execuções (chave do histórico salvo). */
+  readonly sessionId: string;
+  /** Pasta atual do shell, quando conhecida (OSC 7 ou /proc no Linux). */
+  currentCwd = "";
+  /** Há saída nova desde a última serialização do histórico. */
+  scrollbackDirty = false;
+  /** Participa da transmissão de entrada (broadcast) quando ela está ligada. */
+  broadcastMember = false;
 
   private term: Terminal;
+  private serializeAddon = new SerializeAddon();
+  private search!: TerminalSearch;
+  private broadcastBtn!: HTMLButtonElement;
+  private cwdTimer: ReturnType<typeof setInterval> | null = null;
+  private userInputUntil = 0;
   private termBody: HTMLDivElement;
   private titleEl!: HTMLSpanElement;
   private activityBadge!: HTMLSpanElement;
@@ -114,11 +156,17 @@ export class TerminalWindow {
   private listeners = new AbortController();
   /** Cancela a inscrição nas mudanças de tema (xterm). */
   private unsubscribeTheme?: () => void;
+  /** Respostas às consultas de cor do terminal (OSC 4/10/11/12). */
+  private colorReporting?: ColorReporting;
 
   onFocus?: (id: number) => void;
   onClose?: (id: number) => void;
   onRestart?: (state: TerminalState) => void;
   onChange?: () => void;
+  /** Digitação/colagem do usuário (para o broadcast reenviar aos outros). */
+  onUserInput?: (id: number, data: string) => void;
+  /** O usuário incluiu/excluiu este terminal do broadcast pelo botão. */
+  onBroadcastToggle?: () => void;
   /** Fornece os grupos (áreas de trabalho) para as abas do modo maximizado. */
   onRequestTerminalTabs?: () => TerminalTabGroup[];
   /** Chamado ao clicar em uma aba de qualquer área de trabalho. */
@@ -136,8 +184,10 @@ export class TerminalWindow {
     y: number,
     w: number,
     h: number,
+    session: TerminalSessionOptions = {},
   ) {
     this.canvas = canvas;
+    this.sessionId = session.sessionId || newSessionId();
     this.id = id;
     this.shellId = shellId;
     this.cwd = cwd;
@@ -172,13 +222,40 @@ export class TerminalWindow {
 
     // O xterm guarda a paleta numa opção própria: trocar o tema do CSS não a
     // atualiza sozinho, então cada terminal vivo se inscreve aqui.
-    this.unsubscribeTheme = onThemeChange(() => {
-      if (!this.disposed) this.term.options.theme = terminalPalette();
+    this.unsubscribeTheme = onThemeChange((theme) => {
+      if (this.disposed) return;
+      this.term.options.theme = terminalPalette();
+      // TUIs que assinam o modo 2031 (OpenCode) reconsultam a paleta e
+      // repintam na hora, sem precisar reabrir o terminal.
+      this.colorReporting?.notifyThemeChange(getTheme(theme).mode);
     });
 
-    this.term.loadAddon(new WebLinksAddon());
+    // Ctrl+clique abre URLs no navegador padrão (window.open não funciona no
+    // webview do Tauri).
+    this.term.loadAddon(
+      new WebLinksAddon((event, uri) => {
+        if (!isLinkActivation(event)) return;
+        void openExternalUrl(uri).catch(() => {});
+      }),
+    );
+    this.term.loadAddon(this.serializeAddon);
 
     this.term.open(this.termBody);
+    this.search = new TerminalSearch(this.term, () => this.term.focus());
+    this.element.appendChild(this.search.element);
+    registerPathLinks(
+      this.term,
+      () => this.currentCwd || this.cwd,
+      (message) => warnClipboard(message),
+    );
+    this.bindCwdTracking();
+    if (session.restoreScrollback) this.restoreScrollback(session.restoreScrollback);
+    // Responde às consultas de paleta para que TUIs (OpenCode, etc.) sigam o
+    // tema do app em vez de usar o fallback próprio.
+    this.colorReporting = installColorReporting(this.term, (data) => {
+      if (this.disposed) return;
+      void writeTerminal(this.id, new TextEncoder().encode(data)).catch(() => {});
+    });
     this.bindTerminalInput();
     this.bindWindowEvents();
     this.bindKeyboard();
@@ -249,6 +326,22 @@ export class TerminalWindow {
 
     const controls = document.createElement("div");
     controls.className = "term-controls";
+
+    // Só aparece com o broadcast ligado (ver `body.broadcast-on` no CSS).
+    this.broadcastBtn = document.createElement("button");
+    this.broadcastBtn.className = "term-broadcast";
+    this.broadcastBtn.type = "button";
+    this.broadcastBtn.title = "Incluir/excluir da transmissão de entrada";
+    this.broadcastBtn.setAttribute("aria-pressed", "false");
+    this.broadcastBtn.innerHTML =
+      '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="1.6" fill="currentColor"/>' +
+      '<path d="M5 5a4.2 4.2 0 0 0 0 6M11 5a4.2 4.2 0 0 1 0 6M3 3a7 7 0 0 0 0 10M13 3a7 7 0 0 1 0 10"/></svg>';
+    this.broadcastBtn.addEventListener("click", () => {
+      this.setBroadcastMember(!this.broadcastMember);
+      this.onBroadcastToggle?.();
+    });
+    controls.appendChild(this.broadcastBtn);
 
     const btnMin = document.createElement("button");
     btnMin.textContent = "−";
@@ -326,11 +419,110 @@ export class TerminalWindow {
   }
 
   private bindTerminalInput(): void {
+    // O xterm também emite onData para respostas automáticas (DA, foco...):
+    // só a digitação, a colagem e a composição do usuário vão para o broadcast.
+    const markUserInput = () => {
+      this.userInputUntil = performance.now() + USER_INPUT_WINDOW_MS;
+    };
+    for (const type of ["keydown", "paste", "compositionend"]) {
+      this.termBody.addEventListener(type, markUserInput, true);
+    }
+
     this.term.onData(async (data) => {
       if (this.disposed) return;
+      if (performance.now() <= this.userInputUntil) {
+        this.onUserInput?.(this.id, data);
+      }
       const encoder = new TextEncoder();
       await writeTerminal(this.id, encoder.encode(data));
     });
+  }
+
+  /** Envia dados ao shell como se tivessem sido digitados aqui (broadcast). */
+  sendInput(data: string): void {
+    if (this.disposed) return;
+    void writeTerminal(this.id, new TextEncoder().encode(data)).catch(() => {});
+  }
+
+  /** Liga/desliga a participação no broadcast (realce visual incluso). */
+  setBroadcastMember(member: boolean): void {
+    this.broadcastMember = member;
+    this.element.classList.toggle("broadcasting", member);
+    this.broadcastBtn?.classList.toggle("on", member);
+    this.broadcastBtn?.setAttribute("aria-pressed", String(member));
+  }
+
+  /** Abre a barra de busca (Ctrl+Shift+F). */
+  openSearch(): void {
+    if (this.disposed) return;
+    this.search.open();
+  }
+
+  /** Acompanha a pasta atual do shell: OSC 7 e leitura de /proc no Linux. */
+  private bindCwdTracking(): void {
+    const setCwd = (path: string) => {
+      if (!path || path === this.currentCwd) return;
+      this.currentCwd = path;
+      this.onChange?.();
+    };
+
+    // OSC 7 (file://host/caminho) — emitido por shells configurados para isso.
+    // No Windows o caminho seria de outro sistema (WSL), então é ignorado.
+    if (!navigator.userAgent.includes("Windows")) {
+      this.term.parser.registerOscHandler(7, (data) => {
+        try {
+          const url = new URL(data);
+          if (url.protocol === "file:") setCwd(decodeURIComponent(url.pathname));
+        } catch {
+          // Sequência malformada: ignora.
+        }
+        return true;
+      });
+    }
+
+    const poll = async () => {
+      if (this.disposed) return;
+      try {
+        const path = await terminalCwd(this.id);
+        if (path) setCwd(path);
+      } catch {
+        // Sessão encerrada ou plataforma sem suporte.
+      }
+    };
+    void poll();
+    this.cwdTimer = setInterval(() => void poll(), CWD_POLL_MS);
+  }
+
+  private stopBackgroundWork(): void {
+    if (this.cwdTimer) {
+      clearInterval(this.cwdTimer);
+      this.cwdTimer = null;
+    }
+  }
+
+  /** Reescreve o histórico da sessão anterior antes da saída do novo shell. */
+  private restoreScrollback(text: string): void {
+    this.term.write(text);
+    this.term.write(`\r\n${RESET_MODES}\x1b[2m── sessão anterior ──\x1b[0m\r\n`);
+  }
+
+  /**
+   * Histórico atual em ANSI, reduzindo as linhas até caber em `maxChars`.
+   * `null` quando não vale salvar (tela alternativa de uma TUI, por exemplo).
+   */
+  serializeScrollback(maxChars: number): string | null {
+    if (this.disposed || this.term.buffer.active.type !== "normal") return null;
+    let lines = SCROLLBACK_SAVE_LINES;
+    for (;;) {
+      const text = this.serializeAddon.serialize({
+        scrollback: lines,
+        excludeModes: true,
+        excludeAltBuffer: true,
+      });
+      if (text.length <= maxChars) return text.trim() ? text : "";
+      if (lines <= 50) return null;
+      lines = Math.floor(lines / 2);
+    }
   }
 
   private bindWindowEvents(): void {
@@ -414,6 +606,8 @@ export class TerminalWindow {
    */
   pasteCommand(command: string, execute = false): void {
     if (this.disposed) return;
+    // Comandos rápidos também participam do broadcast.
+    this.userInputUntil = performance.now() + USER_INPUT_WINDOW_MS;
     if (execute) {
       this.term.input(`${command}\r`);
     } else {
@@ -465,6 +659,7 @@ export class TerminalWindow {
       }
       const text = new TextDecoder().decode(bytes);
       this.term.write(text);
+      this.scrollbackDirty = true;
       if (!this.element.classList.contains("active")) {
         this.setActivity(true);
       }
@@ -897,8 +1092,10 @@ export class TerminalWindow {
     if (this.disposed) return;
     this.disposed = true;
     this.cancelStartupCommand();
+    this.stopBackgroundWork();
     offPtyData(this.id);
     killTerminal(this.id);
+    this.colorReporting?.dispose();
     this.term.dispose();
     this.unsubscribeTheme?.();
     this.listeners.abort();
@@ -907,9 +1104,11 @@ export class TerminalWindow {
 
   dispose(): void {
     this.cancelStartupCommand();
+    this.stopBackgroundWork();
     if (!this.disposed) {
       this.disposed = true;
       offPtyData(this.id);
+      this.colorReporting?.dispose();
       this.term.dispose();
       this.unsubscribeTheme?.();
     }
@@ -925,10 +1124,12 @@ export class TerminalWindow {
    */
   destroy(): void {
     this.cancelStartupCommand();
+    this.stopBackgroundWork();
     if (!this.disposed) {
       this.disposed = true;
       offPtyData(this.id);
       void killTerminal(this.id).catch(() => {});
+      this.colorReporting?.dispose();
       this.term.dispose();
       this.unsubscribeTheme?.();
     }
@@ -937,6 +1138,8 @@ export class TerminalWindow {
     this.onClose = undefined;
     this.onFocus = undefined;
     this.onChange = undefined;
+    this.onUserInput = undefined;
+    this.onBroadcastToggle = undefined;
     this.onRestart = undefined;
   }
 
@@ -944,12 +1147,13 @@ export class TerminalWindow {
     return {
       id: this.id,
       shellId: this.shellId,
-      cwd: this.cwd,
+      cwd: this.currentCwd || this.cwd,
       title: this.title,
       x: this.x,
       y: this.y,
       w: this.w,
       h: this.h,
+      sessionId: this.sessionId,
       maximized: this.maximized,
       minimized: this.element.classList.contains("minimized"),
       startupCommand: this.startupCommand,
@@ -1196,8 +1400,16 @@ export async function createTerminal(
   y: number,
   w: number,
   h: number,
+  session: TerminalSessionOptions = {},
 ): Promise<TerminalWindow> {
   const id = await spawnTerminal(shellId, cwd, 80, 24);
-  const terminal = new TerminalWindow(canvas, id, shellId, cwd, title, x, y, w, h);
-  return terminal;
+  return new TerminalWindow(canvas, id, shellId, cwd, title, x, y, w, h, session);
+}
+
+function newSessionId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  }
 }

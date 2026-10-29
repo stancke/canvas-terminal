@@ -3,6 +3,7 @@
 pub mod clickup;
 pub mod folders;
 pub mod git;
+pub mod links;
 pub mod pty;
 pub mod shells;
 pub mod usage;
@@ -13,12 +14,13 @@ use clickup::{
 };
 use folders::list_folders;
 use git::{git_diff, git_pull_requests, git_remote_url, git_status};
+use links::{open_path, resolve_path};
 use pty::{
-    PtyState, pty_alive, pty_default_cwd, pty_kill, pty_kill_all, pty_list_shells, pty_resize,
-    pty_spawn, pty_write,
+    PtyState, pty_alive, pty_cwd, pty_default_cwd, pty_kill, pty_kill_all, pty_list_shells,
+    pty_resize, pty_spawn, pty_write,
 };
 use std::sync::Arc;
-use tauri::{generate_context, generate_handler, Builder, RunEvent};
+use tauri::{Builder, RunEvent, generate_context, generate_handler};
 use usage::usage_report;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -41,6 +43,9 @@ pub fn run() {
             pty_alive,
             pty_kill_all,
             pty_default_cwd,
+            pty_cwd,
+            resolve_path,
+            open_path,
             usage_report,
             clickup_teams,
             clickup_user,

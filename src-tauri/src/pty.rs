@@ -1,9 +1,9 @@
 //! Backend PTY: gerencia sessões de terminal reais usando portable-pty.
 
-use crate::shells::{default_cwd, default_shell, list_shells, ShellInfo};
-use base64::engine::general_purpose::STANDARD as BASE64;
+use crate::shells::{ShellInfo, default_cwd, default_shell, list_shells};
 use base64::Engine;
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -354,4 +354,36 @@ pub fn pty_alive(state: tauri::State<'_, Arc<PtyState>>, id: u32) -> Result<bool
 pub fn pty_alive_internal(state: &Arc<PtyState>, id: u32) -> Result<bool, String> {
     let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
     Ok(sessions.contains_key(&id))
+}
+
+/// Pasta de trabalho atual do shell da sessão.
+///
+/// Serve para restaurar o terminal na mesma pasta depois de reabrir o app.
+/// Só há leitura confiável no Linux (`/proc/<pid>/cwd`); nas demais
+/// plataformas devolve `None` e o frontend usa o OSC 7 enviado pelo shell.
+#[tauri::command]
+pub fn pty_cwd(state: tauri::State<'_, Arc<PtyState>>, id: u32) -> Result<Option<String>, String> {
+    pty_cwd_internal(&*state, id)
+}
+
+pub fn pty_cwd_internal(state: &Arc<PtyState>, id: u32) -> Result<Option<String>, String> {
+    let pid = {
+        let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        sessions
+            .get(&id)
+            .and_then(|session| session.child.process_id())
+    };
+    Ok(pid.and_then(process_cwd))
+}
+
+#[cfg(target_os = "linux")]
+fn process_cwd(pid: u32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/cwd"))
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_cwd(_pid: u32) -> Option<String> {
+    None
 }

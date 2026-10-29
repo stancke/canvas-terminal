@@ -21,7 +21,10 @@ export type ShortcutAction =
   | "zoom-reset"
   | "toggle-fullscreen"
   | "toggle-theme-menu"
-  | "open-settings";
+  | "open-settings"
+  | "search-terminal"
+  | "toggle-broadcast"
+  | "open-layouts";
 
 export interface ShortcutBinding {
   key: string;
@@ -45,6 +48,9 @@ const DEFAULTS: Record<ShortcutAction, ShortcutBinding> = {
   "toggle-fullscreen": { key: "f11", ctrl: false, shift: false, alt: false },
   "toggle-theme-menu": { key: "l", ctrl: true, shift: true, alt: false },
   "open-settings": { key: ",", ctrl: true, shift: false, alt: false },
+  "search-terminal": { key: "f", ctrl: true, shift: true, alt: false },
+  "toggle-broadcast": { key: "b", ctrl: true, shift: true, alt: false },
+  "open-layouts": { key: "y", ctrl: true, shift: true, alt: false },
 };
 
 const LABELS: Record<ShortcutAction, string> = {
@@ -62,6 +68,9 @@ const LABELS: Record<ShortcutAction, string> = {
   "toggle-fullscreen": "Tela cheia",
   "toggle-theme-menu": "Escolher tema",
   "open-settings": "Configurações",
+  "search-terminal": "Buscar no terminal",
+  "toggle-broadcast": "Transmitir entrada a vários terminais",
+  "open-layouts": "Layouts salvos",
 };
 
 let bindings: Record<ShortcutAction, ShortcutBinding> = load();
