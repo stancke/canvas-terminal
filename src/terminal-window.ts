@@ -12,7 +12,13 @@ import {
   type PtyEvent,
 } from "./pty";
 import { Canvas, MAX_ZOOM, MIN_ZOOM } from "./canvas";
-import { isSshShell, spawnSshTerminal } from "./ssh";
+import {
+  getSshHost,
+  isSshShell,
+  spawnSshTerminal,
+  sshHostIdOf,
+  sshHostLabel,
+} from "./ssh";
 import { installColorReporting, type ColorReporting } from "./osc-colors";
 import { getTheme, onThemeChange, terminalPalette } from "./theme";
 import { TerminalSearch } from "./terminal-search";
@@ -193,6 +199,7 @@ export class TerminalWindow {
   /** PTY atual; `null` em terminal remoto ainda desconectado. */
   private ptyId: number | null;
   private connectOverlay?: HTMLDivElement;
+  private connectTitle?: HTMLSpanElement;
   private connecting = false;
   /** Conectado, mas o servidor ainda não mandou nada (mantém "Conectando…"). */
   private awaitingFirstOutput = false;
@@ -529,6 +536,11 @@ export class TerminalWindow {
   private buildConnectOverlay(): void {
     const overlay = document.createElement("div");
     overlay.className = "term-connect";
+    // Acima do botão: a conexão que este terminal vai abrir, para não conectar
+    // no servidor errado quando há várias janelas remotas iguais na área.
+    const title = document.createElement("span");
+    title.className = "term-connect-title";
+    title.textContent = this.connectLabel();
     const button = document.createElement("button");
     button.type = "button";
     button.className = "term-connect-btn";
@@ -541,15 +553,24 @@ export class TerminalWindow {
     button.addEventListener("mousedown", (event) => event.stopPropagation());
     const message = document.createElement("span");
     message.className = "term-connect-msg";
-    overlay.append(button, message);
+    overlay.append(title, button, message);
     this.termBody.appendChild(overlay);
     this.connectOverlay = overlay;
+    this.connectTitle = title;
     this.setConnectState("idle");
+  }
+
+  /** Conexão do terminal; a conexão salva manda (o título pode ser editado). */
+  private connectLabel(): string {
+    if (!this.remote) return "";
+    const host = getSshHost(sshHostIdOf(this.shellId));
+    return host ? sshHostLabel(host) : this.title;
   }
 
   private setConnectState(state: "idle" | "connecting" | "connected", message = ""): void {
     const overlay = this.connectOverlay;
     if (!overlay) return;
+    if (this.connectTitle) this.connectTitle.textContent = this.connectLabel();
     overlay.classList.toggle("hidden", state === "connected");
     overlay.classList.toggle("connecting", state === "connecting");
     const button = overlay.querySelector<HTMLButtonElement>(".term-connect-btn");

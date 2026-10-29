@@ -164,6 +164,9 @@ todas. As sessões continuam vivas ao trocar de área.
 
 - **+** cria uma nova área com um terminal no centro.
 - Clique em um item para trocar de área.
+- **Arraste um item para cima ou para baixo** para mudar a ordem das áreas no
+  painel; a ordem fica salva no perfil e vale ao reabrir o app. O arrasto não
+  abre a área: só o clique (sem mover) troca de área.
 - **Duplo clique** no item (ou **botão direito → Editar área de trabalho**)
   abre o editor com **nome, cor, ícone, imagem e pasta**. A imagem e o ícone
   substituem a inicial da área no painel; a pasta vale para os novos terminais

@@ -149,6 +149,8 @@ let activeWorkspace: Workspace | null = null;
 let railUserCollapsed = false;
 /** Ordem dos grupos (áreas) exibida somente nas abas do modo maximizado. */
 let tabGroupOrder: string[] = [];
+/** Evita abrir uma área no clique que fecha um arrasto no painel lateral. */
+let suppressRailClick = false;
 
 const ui = {
   fullscreenBtn: document.querySelector<HTMLButtonElement>("#btn-fullscreen")!,
@@ -2638,6 +2640,8 @@ function renderWorkspaceRail(): void {
     }
 
     button.addEventListener("click", () => {
+      // Um arrasto que termina sobre a própria área não deve trocar de área.
+      if (suppressRailClick) return;
       void activateWorkspace(workspace.id);
     });
     button.addEventListener("dblclick", (event) => {
@@ -2655,6 +2659,8 @@ function renderWorkspaceRail(): void {
       void activateWorkspace(workspace.id);
     });
 
+    bindWorkspaceDrag(button, workspace);
+
     list.appendChild(button);
   }
 
@@ -2662,6 +2668,112 @@ function renderWorkspaceRail(): void {
     .querySelector<HTMLElement>(".rail-workspace.active")
     ?.scrollIntoView({ block: "nearest" });
   syncHeaderTitle();
+}
+
+/**
+ * Arrasto vertical no painel lateral para reordenar as áreas de trabalho.
+ *
+ * A ordem que vale é a do array `workspaces` (é ele que o perfil grava), então
+ * o arrasto só marca antes/depois do alvo e a reordenação acontece no soltar.
+ * O clique continua abrindo a área; o arrasto só suprime o clique do fim.
+ */
+function bindWorkspaceDrag(button: HTMLElement, workspace: Workspace): void {
+  button.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+
+    const startY = event.clientY;
+    let dragging = false;
+    let dropTarget: HTMLElement | null = null;
+
+    const clearDropTarget = () => {
+      dropTarget?.classList.remove("drop-before", "drop-after");
+      dropTarget = null;
+    };
+
+    const finish = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", onCancel);
+      button.classList.remove("dragging");
+      clearDropTarget();
+    };
+
+    const onCancel = () => {
+      dragging = false;
+      finish();
+    };
+
+    const onMove = (move: PointerEvent) => {
+      if (!dragging) {
+        // Mesmo limiar das abas: clique curto abre, arrasto reordena.
+        if (Math.abs(move.clientY - startY) < 6) return;
+        dragging = true;
+        button.classList.add("dragging");
+      }
+      move.preventDefault();
+
+      const el = document.elementFromPoint(move.clientX, move.clientY) as HTMLElement | null;
+      const candidate = el?.closest<HTMLElement>(".rail-workspace") ?? null;
+      if (candidate !== dropTarget) {
+        clearDropTarget();
+        dropTarget = candidate;
+      }
+      if (dropTarget && dropTarget !== button) {
+        const rect = dropTarget.getBoundingClientRect();
+        const after = move.clientY > rect.top + rect.height / 2;
+        dropTarget.classList.toggle("drop-after", after);
+        dropTarget.classList.toggle("drop-before", !after);
+      } else if (dropTarget === button) {
+        clearDropTarget();
+      }
+    };
+
+    const onUp = (up: PointerEvent) => {
+      const wasDragging = dragging;
+      finish();
+      if (!wasDragging) return;
+
+      suppressRailClick = true;
+      setTimeout(() => {
+        suppressRailClick = false;
+      }, 250);
+
+      const el = document.elementFromPoint(up.clientX, up.clientY) as HTMLElement | null;
+      const target = el?.closest<HTMLElement>(".rail-workspace") ?? null;
+      if (!target || target === button) return;
+
+      const targetWorkspace = workspaces.find(
+        (entry) => entry.id === target.dataset.workspaceId,
+      );
+      if (!targetWorkspace) return;
+
+      const rect = target.getBoundingClientRect();
+      const after = up.clientY > rect.top + rect.height / 2;
+      moveWorkspaceInList(workspace, targetWorkspace, after);
+    };
+
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("blur", onCancel);
+  });
+}
+
+/** Move `workspace` para antes/depois de `target` e regrava o perfil. */
+function moveWorkspaceInList(
+  workspace: Workspace,
+  target: Workspace,
+  after: boolean,
+): void {
+  if (workspace === target) return;
+  const fromIndex = workspaces.indexOf(workspace);
+  if (fromIndex < 0) return;
+  workspaces.splice(fromIndex, 1);
+  const insert = workspaces.indexOf(target) + (after ? 1 : 0);
+  workspaces.splice(insert, 0, workspace);
+  renderWorkspaceRail();
+  persist();
 }
 
 /** O centro do cabeçalho mostra a área ativa (ou o nome do app). */

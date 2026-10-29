@@ -762,11 +762,26 @@ body.rail-collapsed #workspace-rail {
   border: 1px solid transparent;
   border-radius: 10px;
   cursor: pointer;
+  touch-action: none;
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
 .rail-workspace:hover {
   background: var(--hover);
+}
+
+/* Arrasto vertical para reordenar as áreas: marca onde vai entrar. */
+.rail-workspace.dragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+
+.rail-workspace.drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.rail-workspace.drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .rail-workspace:focus-visible {
@@ -1773,6 +1788,23 @@ body.terminal-maximized #rail-toggle {
 }
 
 .term-connect.hidden {
+  display: none;
+}
+
+/* Conexão do terminal, acima do botão. */
+.term-connect-title {
+  max-width: 90%;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: calc(15px * var(--tz, 1));
+  font-weight: 600;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.term-connect-title:empty {
   display: none;
 }
 

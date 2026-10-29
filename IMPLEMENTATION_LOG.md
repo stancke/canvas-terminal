@@ -354,3 +354,19 @@ Verificado no Chrome headless: maximizado em 110%/121%/133%, a barra de abas fic
 - `src/main.ts`: item no menu de contexto do canvas, **Editar conexão SSH...**/**Reconectar** no título, aba **Conexões SSH** nas configurações; diálogo ganhou validação que mantém o formulário aberto em caso de erro. Restaurados não conectam; criados agora conectam na hora (`autoConnect`).
 
 Verificação: `npx tsc --noEmit`, `npm run build`, `cargo fmt --check`, `cargo test` (5 testes novos em `ssh::tests`) e `cargo build --release --features custom-protocol` passaram. O binário de release em modo askpass devolveu a senha para `user@host's password:` (saída 0) e recusou `(yes/no)?` (saída 1). Conexão real não testada: não havia `sshd` na máquina; a UI não foi exercitada no navegador.
+
+## Rodada - fim de sessão no Windows e rótulo da conexão
+
+- `src-tauri/src/pty.rs`: o evento `exit` nunca chegava ao frontend. No Windows o `read` do ConPTY **não** termina quando o processo filho sai, então o laço de leitura ficava bloqueado e o `wait()`/`exit` só rodava no `pty_kill`. Agora cada sessão tem duas threads: uma lê a saída, a outra vigia o processo com `try_wait` a cada 120 ms; quando ele termina, o vigia espera 120 ms (para drenar a última saída), remove a sessão — o que solta o `master` e fecha o pseudoconsole — e emite `exit` com o código real. `Session.child` virou `Arc<Mutex<Box<dyn Child + Send + Sync>>>` (compartilhado com o vigia e o `pty_cwd`); `pty_kill` continua matando pelo mesmo `child`. Isso conserta, de uma vez, o botão **Conectar** que não voltava depois do `exit` e o aviso **Processo finalizado** dos terminais locais.
+- `src/terminal-window.ts`: o overlay de conexão ganhou a label `.term-connect-title` acima do botão, com o nome da conexão salva (`sshHostLabel`), atualizada a cada troca de estado — o usuário vê em qual servidor vai entrar.
+- `src/styles.css`: estilo da label (15 px escalado por `--tz`, `--text`, truncamento com reticências).
+
+Verificação: sonda de integração descartável contra o servidor real (`ssh` + `exit`) passou a receber `exit` com código 0 após ~4 s (antes: nenhum evento em 60 s); `cargo test`, `npx tsc --noEmit`, `npm run build` e `cargo build --release --features custom-protocol` passaram. Conferido também que host key antiga no `known_hosts` era o que bloqueava a primeira conexão.
+
+## Rodada - reordenar áreas arrastando no painel lateral
+
+- `src/main.ts`: `renderWorkspaceRail` passou a chamar `bindWorkspaceDrag` em cada item. O arrasto segue o mesmo padrão de ponteiro das abas do modo maximizado (limiar de 6 px, classes `dragging`/`drop-before`/`drop-after`), mas vertical: o alvo é detectado por `elementFromPoint` + `.rail-workspace` e a posição antes/depois vem do meio do item. No soltar, `moveWorkspaceInList` reordena o array `workspaces` (é ele que o perfil grava) e chama `renderWorkspaceRail` + `persist`. `suppressRailClick` evita que o clique do fim do arrasto troque de área.
+- `src/styles.css`: `touch-action: none` no item, estado `.dragging` (opacidade 0,4) e indicadores `.drop-before`/`.drop-after` com filete interno em `--accent`.
+- `README.md`: documentado o arrasto para reordenar e a diferença entre arrastar e clicar.
+
+Verificação: `npx tsc --noEmit`, `npm run build` e `cargo build --release --features custom-protocol` passaram; binário de release e atalho da área de trabalho atualizados. Sem teste de UI automatizado (sem stub do Tauri nesta rodada).
