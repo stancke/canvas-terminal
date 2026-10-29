@@ -2026,7 +2026,7 @@ body.terminals-minimized #clickup-hotzone {
   display: none;
 }
 
-/* ---- Mini-mapa do canvas (só no modo minimizado) ---- */
+/* ---- Mini-mapa do canvas ---- */
 
 #minimap {
   position: fixed;
@@ -2044,7 +2044,7 @@ body.terminals-minimized #clickup-hotzone {
   pointer-events: none;
 }
 
-body.terminals-minimized #minimap {
+body.minimap-visible #minimap {
   display: block;
 }
 

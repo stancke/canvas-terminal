@@ -3008,7 +3008,9 @@ function syncMaximizedView(): void {
   // maximizado (os dois modos não coexistem).
   const minimized = !maximized && all.some((terminal) => terminal.element.classList.contains("minimized"));
   document.body.classList.toggle("terminals-minimized", minimized);
-  minimap?.setVisible(minimized);
+  // Mini-mapa visível no modo normal e no modo minimizado, desde que haja
+  // pelo menos um terminal e nenhum terminal esteja maximizado.
+  minimap?.setVisible(!maximized && all.length > 0);
 
   if (changed) {
     document.body.classList.toggle("terminal-maximized", maximized);
