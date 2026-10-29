@@ -176,6 +176,23 @@ async function main(): Promise<void> {
   // Abrir outro modal fecha o Git (e vice-versa pelo botão do Git).
   document.addEventListener("plugin-panel-opened", () => gitPanel?.close());
 
+  // Atalho flutuante de diff do Git no modo maximizado (canto superior direito).
+  const gitDiffHotzone = document.getElementById("git-diff-hotzone")!;
+  const openGitDiff = () => {
+    closeAppMenu();
+    closeThemeMenu();
+    document.dispatchEvent(
+      new CustomEvent("plugin-panel-opened", { detail: "git" }),
+    );
+    gitPanel?.open();
+  };
+  gitDiffHotzone.addEventListener("click", openGitDiff);
+  gitDiffHotzone.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openGitDiff();
+  });
+
   await restoreWorkspaces();
   updateStatus();
   trackMouseCoordinates();
@@ -1354,6 +1371,7 @@ function bindQuickPanel(): void {
 
   // O painel abre e fecha somente pelo clique na alça lateral (sem hover).
   const hotzone = document.getElementById("quick-hotzone")!;
+  const railQuick = document.getElementById("rail-quick")!;
   const togglePanel = () => {
     const visible = panel.classList.toggle("visible");
     if (!visible) closeQuickForm();
@@ -1361,6 +1379,13 @@ function bindQuickPanel(): void {
 
   hotzone.addEventListener("click", togglePanel);
   hotzone.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    togglePanel();
+  });
+
+  railQuick.addEventListener("click", togglePanel);
+  railQuick.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     togglePanel();
@@ -2912,11 +2937,15 @@ function updateStatus(): void {
  * área volta ao zoom que tinha no modo normal.
  */
 function syncMaximizedView(): void {
-  const maximized = canvas
-    .getAllTerminals()
-    .some((terminal) => terminal.maximized);
+  const all = canvas.getAllTerminals();
+  const maximized = all.some((terminal) => terminal.maximized);
   const wasMaximized = document.body.classList.contains("terminal-maximized");
   const changed = maximized !== wasMaximized;
+
+  // Estado de terminais minimizados: pelo menos um minimizado e nenhum
+  // maximizado (os dois modos não coexistem).
+  const minimized = !maximized && all.some((terminal) => terminal.element.classList.contains("minimized"));
+  document.body.classList.toggle("terminals-minimized", minimized);
 
   if (changed) {
     document.body.classList.toggle("terminal-maximized", maximized);

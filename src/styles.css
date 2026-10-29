@@ -1809,6 +1809,94 @@ body.terminal-maximized #rail-toggle {
   height: 13px;
 }
 
+/* Botão flutuante de diff do Git: só aparece no modo maximizado, abaixo dos
+   comandos rápidos no canto superior direito. */
+#git-diff-hotzone {
+  position: fixed;
+  right: 0;
+  top: calc(var(--header-h) + 76px);
+  z-index: 1001;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 44px;
+  color: var(--text-muted);
+  background: var(--quick-bg);
+  border: 1px solid var(--quick-border);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  cursor: pointer;
+  opacity: 0.55;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+#git-diff-hotzone:hover,
+#git-diff-hotzone:focus-visible {
+  opacity: 1;
+  color: var(--text);
+  background: var(--window);
+  outline: none;
+}
+
+#git-diff-hotzone svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Modo maximizado: comandos rápidos no canto superior direito; diff do Git
+   logo abaixo. O painel de comandos abre ancorado à direita. */
+body.terminal-maximized #quick-hotzone {
+  left: auto;
+  right: 0;
+  bottom: auto;
+  top: calc(var(--header-h) + 12px);
+  border-left: 1px solid var(--quick-border);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+}
+
+body.terminal-maximized #git-diff-hotzone {
+  display: flex;
+}
+
+body.terminal-maximized #quick-panel {
+  left: auto;
+  right: 26px;
+  bottom: auto;
+  top: calc(var(--header-h) + 12px);
+  transform: translateX(calc(100% + 24px));
+}
+
+body.terminal-maximized #quick-panel.visible {
+  transform: translateX(0);
+}
+
+/* Modo com terminais minimizados: o botão de comandos rápidos aparece no
+   painel lateral, acima do botão de uso de tokens. A alça flutuante some
+   para não competir com o botão do painel. */
+body.terminals-minimized #rail-quick {
+  display: flex;
+  opacity: 0.85;
+  color: var(--text);
+}
+
+body.terminals-minimized #rail-quick:hover,
+body.terminals-minimized #rail-quick:focus-visible {
+  opacity: 1;
+  background: var(--hover);
+}
+
+body.terminals-minimized #quick-hotzone {
+  display: none;
+}
+
+#rail-quick {
+  display: none;
+}
+
 #quick-panel {
   position: fixed;
   left: calc(var(--rail-w) + 26px);
