@@ -21,6 +21,8 @@ export interface LayoutSlot {
   /** Vazio = título automático. */
   title: string;
   startupCommand: string;
+  /** Falso = comando manual, disparado pelo botão Executar do terminal. */
+  startupAuto?: boolean;
 }
 
 export interface SavedLayout {
@@ -109,6 +111,7 @@ function parseSlot(value: unknown): LayoutSlot | null {
     cwd: text(s.cwd),
     title: text(s.title),
     startupCommand: text(s.startupCommand),
+    startupAuto: s.startupAuto !== false,
   };
 }
 
@@ -188,6 +191,7 @@ export function captureLayout(
       cwd: details ? terminal.cwd : "",
       title: details ? terminal.title : "",
       startupCommand: details ? terminal.startupCommand : "",
+      startupAuto: details ? terminal.startupAuto : true,
     })),
   };
 }

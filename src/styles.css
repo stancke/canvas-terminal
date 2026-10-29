@@ -1371,6 +1371,23 @@ body.terminal-maximized #rail-toggle {
   font-size: 11px;
 }
 
+/* Opção "executar automaticamente" do comando de inicialização. */
+.dialog-body .startup-auto {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  cursor: pointer;
+}
+
+.dialog-body .startup-auto input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* Aviso de salvamento no canto superior direito */
 #toast {
   position: fixed;
@@ -1806,6 +1823,18 @@ body.terminal-maximized #rail-toggle {
 
 .term-connect-title:empty {
   display: none;
+}
+
+/* Comando de inicialização manual: mesmo overlay do botão Conectar. */
+.term-run-command-text {
+  max-width: 90%;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--tz, 1));
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .term-connect-btn {

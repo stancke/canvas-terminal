@@ -232,17 +232,24 @@ então `~/.ssh/config`, `known_hosts` e o agente continuam valendo. Sem senha, o
 
 ## Comando automático por terminal
 
-Cada terminal pode ter um comando executado automaticamente ao abrir. Para
-configurar:
+Cada terminal pode ter um comando de inicialização. Para configurar:
 
 - clique com o **botão direito no título do terminal** → **Comando de
   inicialização...**; ou
 - use **Janela → Comando de inicialização...** com o terminal em foco.
 
-O comando fica salvo no perfil e roda cerca de meio segundo depois que o shell
-sobe, tanto ao iniciar o aplicativo quanto ao reiniciar o terminal. Deixe o
-campo vazio para desativar. Terminais de áreas que ainda não foram abertas
-executam o comando quando a área é restaurada.
+O diálogo tem a opção **Executar automaticamente ao abrir o terminal**:
+
+- **marcada** (padrão): o comando roda cerca de meio segundo depois que o shell
+  sobe, tanto ao iniciar o aplicativo quanto ao reiniciar o terminal;
+- **desmarcada**: nada roda sozinho. O terminal mostra o mesmo overlay do botão
+  **Conectar** — fundo esmaecido, o comando como label e um botão grande
+  **Executar**. Ao clicar, o comando é enviado ao shell com Enter e o overlay
+  desaparece. Nos terminais SSH ele só aparece depois de conectar.
+
+Deixe o campo vazio para desativar. Terminais de áreas que ainda não foram
+abertas seguem essa configuração quando a área é restaurada, e o modo manual
+também é preservado nos layouts salvos.
 
 ---
 

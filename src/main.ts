@@ -355,6 +355,7 @@ async function createTerminalForWorkspace(
   w: number,
   h: number,
   startupCommand = "",
+  startupAuto = true,
   session: TerminalSessionOptions = {},
 ): Promise<TerminalWindow> {
   const terminal = await createTerminal(canvas, shellId, cwd, title, x, y, w, h, session);
@@ -405,6 +406,7 @@ async function createTerminalForWorkspace(
       state.cwd,
       state.title,
       state.startupCommand,
+      state.startupAuto,
     );
   };
   terminal.onChange = () => {
@@ -415,6 +417,7 @@ async function createTerminalForWorkspace(
   terminal.onSelectTerminalTab = (ref) => void selectTerminalTab(ref);
   terminal.onToggleAppMenu = () => toggleMaximizedAppMenu();
   terminal.startupCommand = startupCommand.trim();
+  terminal.startupAuto = startupAuto;
   if (terminal.startupCommand) terminal.scheduleStartupCommand();
 
   return terminal;
@@ -430,6 +433,7 @@ async function addTerminalToWorkspace(
   cwd?: string,
   title?: string,
   startupCommand?: string,
+  startupAuto = true,
 ): Promise<TerminalWindow> {
   const cwdPath = cwd || workspace.folder || (await defaultCwd());
   const terminalTitle = terminalTitleFor(workspace, shellId, title);
@@ -443,6 +447,7 @@ async function addTerminalToWorkspace(
     w,
     h,
     startupCommand,
+    startupAuto,
     { autoConnect: true },
   );
 
@@ -1383,25 +1388,42 @@ function closeDialog(): boolean {
 function editStartupCommand(terminal: TerminalWindow): void {
   showConfirm(
     "Comando de inicialização",
-    `<p>Este comando será executado automaticamente quando o terminal abrir:
-     ao iniciar o app ou reiniciar o terminal.</p>
+    `<p>Este comando pode ser executado ao abrir o terminal ou só quando você
+     pedir, pelo botão <strong>Executar</strong> dentro do terminal.</p>
      <input id="startup-command-input" class="dialog-input" type="text"
        maxlength="2000" placeholder="Ex.: npm run dev" />
-     <p class="dialog-hint">Deixe em branco para desativar.</p>`,
+     <label class="startup-auto">
+       <input id="startup-auto-input" type="checkbox" />
+       <span>Executar automaticamente ao abrir o terminal</span>
+     </label>
+     <p class="dialog-hint">Desmarcado, o comando fica guardado e espera o
+     botão <strong>Executar</strong>. Deixe o comando em branco para
+     desativar.</p>`,
     "Salvar",
     () => {
       const input = document.getElementById(
         "startup-command-input",
       ) as HTMLInputElement | null;
+      const autoInput = document.getElementById(
+        "startup-auto-input",
+      ) as HTMLInputElement | null;
       const command = input?.value.trim() ?? "";
-      terminal.setStartupCommand(command);
+      const auto = autoInput ? autoInput.checked : true;
+      terminal.setStartupCommand(command, auto);
       flashHint(
-        command
-          ? "Comando de inicialização salvo."
-          : "Comando de inicialização removido.",
+        !command
+          ? "Comando de inicialização removido."
+          : auto
+            ? "Comando de inicialização salvo."
+            : "Comando salvo: use Executar no terminal para rodá-lo.",
       );
     },
   );
+
+  const autoInput = document.getElementById(
+    "startup-auto-input",
+  ) as HTMLInputElement | null;
+  if (autoInput) autoInput.checked = terminal.startupAuto;
 
   const input = document.getElementById(
     "startup-command-input",
@@ -1729,6 +1751,7 @@ async function applyLayout(layout: SavedLayout): Promise<void> {
           slot.cwd || undefined,
           slot.title || undefined,
           slot.startupCommand || undefined,
+          slot.startupAuto !== false,
         );
       try {
         await open(slot.shell || selectedShell());
@@ -2152,13 +2175,15 @@ async function instantiateWorkspace(workspace: Workspace): Promise<void> {
         base.w,
         base.h,
         item.startupCommand,
+        item.startupAuto !== false,
         {
           sessionId: item.sessionId,
           zoom: item.zoom,
-          // Com comando de inicialização o terminal se reconstrói sozinho
-          // (ex.: `claude --continue`): o histórico antigo só poluiria a tela.
+          // Comando automático reconstrói a sessão sozinho (ex.: `claude
+          // --continue`): o histórico antigo só poluiria a tela. No modo manual
+          // nada roda ao abrir, então o histórico ajuda a lembrar o contexto.
           restoreScrollback:
-            item.sessionId && !item.startupCommand
+            item.sessionId && !(item.startupCommand && item.startupAuto !== false)
               ? scrollbacks[item.sessionId]
               : undefined,
         },
@@ -2177,6 +2202,7 @@ async function instantiateWorkspace(workspace: Workspace): Promise<void> {
           minimized: false,
           zoom: item.geom.zoom ?? item.zoom ?? 1,
           startupCommand: item.geom.startupCommand ?? item.startupCommand,
+          startupAuto: (item.geom.startupAuto ?? item.startupAuto) !== false,
         };
         terminal.maximized = true;
       }

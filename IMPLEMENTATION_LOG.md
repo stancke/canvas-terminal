@@ -370,3 +370,11 @@ Verificação: sonda de integração descartável contra o servidor real (`ssh` 
 - `README.md`: documentado o arrasto para reordenar e a diferença entre arrastar e clicar.
 
 Verificação: `npx tsc --noEmit`, `npm run build` e `cargo build --release --features custom-protocol` passaram; binário de release e atalho da área de trabalho atualizados. Sem teste de UI automatizado (sem stub do Tauri nesta rodada).
+
+## Rodada - comando de inicialização manual (botão Executar)
+
+- `terminal-window.ts`: novo campo `startupAuto` (padrão `true`). `setStartupCommand(command, auto)` guarda as duas coisas; `scheduleStartupCommand` não agenda nada no modo manual e mostra o overlay `.term-connect.term-run-command` dentro do `term-body`, criado por `buildRunButton`: fundo esmaecido, o comando como label e o botão grande **Executar**, exatamente no padrão do botão **Conectar** do terminal remoto. `runStartupCommand` escreve `comando + \r` no PTY e esconde o overlay; em SSH ele só aparece com sessão conectada e some no `exit`.
+- `persistence.ts` / `layouts.ts`: `startupAuto` salvo e lido no perfil e nos layouts salvos (perfis antigos assumem automático). `main.ts`: o diálogo **Comando de inicialização** ganhou o checkbox **Executar automaticamente ao abrir o terminal**; criar, restaurar, reiniciar e aplicar layout propagam a opção. Com o modo manual, o histórico da sessão anterior volta a ser restaurado (nada roda sozinho ao abrir).
+- `styles.css`: o overlay reaproveita `.term-connect` e `.term-connect-btn`; só o label do comando (`.term-run-command-text`) e a linha `.startup-auto` do diálogo têm estilo próprio.
+
+Verificação: `npx tsc --noEmit` e `npm run build` passaram; conferência visual do overlay (lado a lado com o Conectar) e do checkbox em Chrome headless com o `styles.css` real (harness descartável). Teste de comportamento no app instalado pendente.

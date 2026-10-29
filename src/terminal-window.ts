@@ -44,6 +44,8 @@ export interface TerminalState {
   zoom: number;
   /** Comando executado automaticamente quando o terminal abrir. */
   startupCommand: string;
+  /** Falso = o comando espera o botão Executar (padrão: automático). */
+  startupAuto: boolean;
   /** Identifica o terminal entre execuções (chave do histórico salvo). */
   sessionId?: string;
   savedGeom?: TerminalState;
@@ -173,8 +175,10 @@ export class TerminalWindow {
    */
   zoom = 1;
   savedGeom?: TerminalState;
-  /** Comando a executar automaticamente quando o terminal for aberto. */
+  /** Comando a executar quando o terminal for aberto. */
   startupCommand = "";
+  /** `false` = só roda pelo botão Executar, nunca sozinho. */
+  startupAuto = true;
   /** Identifica o terminal entre execuções (chave do histórico salvo). */
   readonly sessionId: string;
   /** Pasta atual do shell, quando conhecida (OSC 7 ou /proc no Linux). */
@@ -200,6 +204,7 @@ export class TerminalWindow {
   private ptyId: number | null;
   private connectOverlay?: HTMLDivElement;
   private connectTitle?: HTMLSpanElement;
+  private runButton?: HTMLDivElement;
   private connecting = false;
   /** Conectado, mas o servidor ainda não mandou nada (mantém "Conectando…"). */
   private awaitingFirstOutput = false;
@@ -332,6 +337,7 @@ export class TerminalWindow {
     this.bindKeyboard();
 
     if (this.remote) this.buildConnectOverlay();
+    this.buildRunButton();
     if (ptyId !== null) this.attachPty(ptyId);
     // O canvas avisa quando terminais são criados/removidos/trocados de área:
     // a barra de abas do terminal maximizado se mantém atualizada.
@@ -580,6 +586,63 @@ export class TerminalWindow {
     }
     const msg = overlay.querySelector<HTMLElement>(".term-connect-msg");
     if (msg) msg.textContent = message;
+  }
+
+  /**
+   * Overlay do comando de inicialização manual, no mesmo padrão do botão
+   * Conectar do terminal remoto: fundo esmaecido, comando como label e um
+   * botão grande centralizado.
+   */
+  private buildRunButton(): void {
+    const overlay = document.createElement("div");
+    overlay.className = "term-connect term-run-command hidden";
+
+    const text = document.createElement("code");
+    text.className = "term-run-command-text";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "term-connect-btn";
+    button.textContent = "Executar";
+    button.title = "Executar o comando de inicialização agora";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.runStartupCommand();
+    });
+    // O mousedown no corpo foca o xterm; aqui só o clique no botão conta.
+    button.addEventListener("mousedown", (event) => event.stopPropagation());
+
+    overlay.append(text, button);
+    this.termBody.appendChild(overlay);
+    this.runButton = overlay;
+  }
+
+  /** Mostra o botão Executar só quando há comando manual e sessão pronta. */
+  private syncRunButton(): void {
+    const bar = this.runButton;
+    if (!bar) return;
+    const command = this.startupCommand.trim();
+    const ready = !this.remote || this.ptyId !== null;
+    const show = !!command && !this.startupAuto && ready && !this.disposed;
+    const text = bar.querySelector<HTMLElement>(".term-run-command-text");
+    if (text) {
+      text.textContent = command;
+      text.title = command;
+    }
+    bar.classList.toggle("hidden", !show);
+  }
+
+  private hideRunButton(): void {
+    this.runButton?.classList.add("hidden");
+  }
+
+  /** Executa agora o comando de inicialização (botão Executar). */
+  runStartupCommand(): void {
+    const command = this.startupCommand.trim();
+    if (!command || this.disposed) return;
+    this.cancelStartupCommand();
+    this.hideRunButton();
+    this.writePty(`${command}\r`);
   }
 
   /** Abre a sessão SSH do terminal remoto (botão Conectar). */
@@ -864,23 +927,32 @@ export class TerminalWindow {
 
   /**
    * Define o comando de inicialização. Não executa agora: ele roda na próxima
-   * vez que o terminal for aberto (início do app ou reinício do terminal).
+   * vez que o terminal for aberto (início do app ou reinício do terminal) —
+   * ou, com `auto = false`, só quando o botão Executar for clicado.
    */
-  setStartupCommand(command: string): void {
+  setStartupCommand(command: string, auto = true): void {
     this.startupCommand = command.trim();
+    this.startupAuto = auto;
+    this.cancelStartupCommand();
+    this.syncRunButton();
     this.onChange?.();
   }
 
-  /** Agenda o comando de inicialização após o shell terminar de subir. */
+  /**
+   * Agenda o comando de inicialização após o shell terminar de subir. No modo
+   * manual não agenda nada: só mostra o botão Executar.
+   */
   scheduleStartupCommand(): void {
-    if (this.startupTimer) {
-      clearTimeout(this.startupTimer);
-      this.startupTimer = null;
-    }
+    this.cancelStartupCommand();
     const command = this.startupCommand.trim();
     if (!command || this.disposed) return;
     // Remoto: roda só depois que a conexão responder (ver onPtyEvent).
     if (this.remote && (this.ptyId === null || this.awaitingFirstOutput)) return;
+    if (!this.startupAuto) {
+      this.syncRunButton();
+      return;
+    }
+    this.hideRunButton();
     this.startupTimer = setTimeout(() => {
       this.startupTimer = null;
       if (this.disposed) return;
@@ -922,6 +994,7 @@ export class TerminalWindow {
         // Remoto volta para o botão Conectar em vez de fechar a janela.
         this.awaitingFirstOutput = false;
         this.detachPty(false);
+        this.hideRunButton();
         this.setConnectState(
           "idle",
           event.code ? `Conexão encerrada (código ${event.code}).` : "Conexão encerrada.",
@@ -1354,6 +1427,7 @@ export class TerminalWindow {
       minimized: false,
       zoom: this.zoom,
       startupCommand: this.startupCommand,
+      startupAuto: this.startupAuto,
     };
   }
 
@@ -1502,6 +1576,7 @@ export class TerminalWindow {
       minimized: this.element.classList.contains("minimized"),
       zoom: this.zoom,
       startupCommand: this.startupCommand,
+      startupAuto: this.startupAuto,
       savedGeom: this.savedGeom,
     };
   }

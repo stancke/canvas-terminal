@@ -31,6 +31,8 @@ export interface SavedTerminal {
   zoom?: number;
   /** Comando executado automaticamente quando o terminal abrir. */
   startupCommand: string;
+  /** Falso = o comando só roda pelo botão Executar (padrão: automático). */
+  startupAuto?: boolean;
   /** Identifica o terminal entre execuções (chave do histórico salvo). */
   sessionId?: string;
   geom?: SavedTerminal;
@@ -77,6 +79,7 @@ export function toSavedTerminal(state: TerminalState): SavedTerminal {
     minimized: state.minimized,
     zoom: state.zoom,
     startupCommand: state.startupCommand,
+    startupAuto: state.startupAuto,
     sessionId: state.sessionId,
     geom: state.savedGeom ? toSavedTerminal(state.savedGeom) : undefined,
   };
@@ -133,6 +136,8 @@ function parseTerminals(value: unknown): SavedTerminal[] {
           : 1,
       startupCommand:
         typeof t.startupCommand === "string" ? t.startupCommand : "",
+      // Perfis antigos não têm o campo: o padrão sempre foi executar sozinho.
+      startupAuto: t.startupAuto !== false,
       sessionId:
         typeof t.sessionId === "string" && t.sessionId ? t.sessionId : undefined,
       geom:
