@@ -378,3 +378,10 @@ Verificação: `npx tsc --noEmit`, `npm run build` e `cargo build --release --fe
 - `styles.css`: o overlay reaproveita `.term-connect` e `.term-connect-btn`; só o label do comando (`.term-run-command-text`) e a linha `.startup-auto` do diálogo têm estilo próprio.
 
 Verificação: `npx tsc --noEmit` e `npm run build` passaram; conferência visual do overlay (lado a lado com o Conectar) e do checkbox em Chrome headless com o `styles.css` real (harness descartável). Teste de comportamento no app instalado pendente.
+
+## Rodada - tema do OpenCode seguindo o tema do app
+
+- `src-tauri/src/pty.rs`: `COLORTERM=truecolor` passou a ser definido em todas as plataformas (antes era só `#[cfg(unix)]`). Sem isso, no Windows as TUIs viam apenas 256 cores e aproximavam a paleta do tema; `TERM` já era `xterm-256color`.
+- Fora do repositório: `~/.config/opencode/cli.json` (v2) recebeu `"theme": { "name": "system", "mode": "system" }` (backup em `cli.json.bak-20261029`). `name: system` faz o OpenCode derivar as cores do terminal; depende das respostas OSC 4/10/11 e do modo 2031 que `src/osc-colors.ts` já implementa.
+
+Verificação: harness em navegador importando `osc-colors.ts` e `theme.ts` reais confirmou as respostas — `OSC 11` → `rgb:2828/2c2c/3434`, `OSC 10` → `rgb:abab/b2b2/bfbf`, `OSC 4` para os índices 0–3 e `CSI ? 997 ; 1 n` ao habilitar o modo 2031 (escuro) / `2 n` ao trocar para claro. `cargo build --release --features custom-protocol` passou e o atalho foi atualizado.

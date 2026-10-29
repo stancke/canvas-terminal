@@ -158,7 +158,8 @@ pub(crate) fn spawn_command<S: Sink + Clone>(
         .map_err(|e| format!("Falha ao abrir PTY: {}", e))?;
 
     cmd.env("TERM", "xterm-256color");
-    #[cfg(unix)]
+    // xterm.js é truecolor em todas as plataformas: sem esta variável TUIs
+    // (OpenCode, Claude Code) assumem 256 cores e aproximam a paleta do tema.
     cmd.env("COLORTERM", "truecolor");
 
     let child = pair
