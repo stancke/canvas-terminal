@@ -568,6 +568,7 @@ export class TerminalWindow {
       this.toggleMaximize();
     }
     if (!nowMinimized) this.scheduleFit();
+    this.onChange?.();
   }
 
   toggleMaximize(): void {
