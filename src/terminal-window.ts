@@ -12,6 +12,7 @@ import {
   type PtyEvent,
 } from "./pty";
 import { Canvas, MAX_ZOOM, MIN_ZOOM } from "./canvas";
+import { isSshShell, spawnSshTerminal } from "./ssh";
 import { installColorReporting, type ColorReporting } from "./osc-colors";
 import { getTheme, onThemeChange, terminalPalette } from "./theme";
 import { TerminalSearch } from "./terminal-search";
@@ -49,6 +50,11 @@ export interface TerminalSessionOptions {
   restoreScrollback?: string;
   /** Zoom próprio do terminal no modo maximizado (restaurado do perfil). */
   zoom?: number;
+  /**
+   * Terminal remoto: conecta já ao criar. Restaurados ao abrir o app ficam
+   * esperando o botão Conectar.
+   */
+  autoConnect?: boolean;
 }
 
 /** Referência a um terminal exibido nas abas do cabeçalho maximizado. */
@@ -114,6 +120,12 @@ function recordGeometryMismatch(entry: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Ids das janelas de terminais remotos: negativos para nunca colidir com os
+ * ids de PTY do backend, já que o PTY remoto muda a cada reconexão.
+ */
+let nextRemoteWindowId = -1;
+
 /** Janela em que um onData do xterm ainda conta como digitação do usuário. */
 const USER_INPUT_WINDOW_MS = 40;
 /**
@@ -137,8 +149,11 @@ function warnClipboard(message: string): void {
 
 export class TerminalWindow {
   readonly element: HTMLDivElement;
+  /** Identifica a janela; nos terminais locais é o próprio id do PTY. */
   readonly id: number;
   readonly shellId: string;
+  /** Terminal remoto (SSH): conecta sob demanda e pode reconectar. */
+  readonly remote: boolean;
   readonly cwd: string;
   title: string;
   x: number;
@@ -175,6 +190,12 @@ export class TerminalWindow {
   private tabsEl!: HTMLDivElement;
   private menuBtn!: HTMLButtonElement;
   private overlay!: HTMLDivElement;
+  /** PTY atual; `null` em terminal remoto ainda desconectado. */
+  private ptyId: number | null;
+  private connectOverlay?: HTMLDivElement;
+  private connecting = false;
+  /** Conectado, mas o servidor ainda não mandou nada (mantém "Conectando…"). */
+  private awaitingFirstOutput = false;
   private canvas: Canvas;
   private disposed = false;
   private resizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -210,7 +231,7 @@ export class TerminalWindow {
 
   constructor(
     canvas: Canvas,
-    id: number,
+    ptyId: number | null,
     shellId: string,
     cwd: string,
     title: string,
@@ -223,7 +244,9 @@ export class TerminalWindow {
     this.canvas = canvas;
     this.sessionId = session.sessionId || newSessionId();
     this.zoom = clampTerminalZoom(session.zoom ?? 1);
-    this.id = id;
+    this.remote = isSshShell(shellId);
+    this.ptyId = ptyId;
+    this.id = this.remote ? nextRemoteWindowId-- : (ptyId ?? nextRemoteWindowId--);
     this.shellId = shellId;
     this.cwd = cwd;
     this.title = title;
@@ -295,13 +318,14 @@ export class TerminalWindow {
     // tema do app em vez de usar o fallback próprio.
     this.colorReporting = installColorReporting(this.term, (data) => {
       if (this.disposed) return;
-      void writeTerminal(this.id, new TextEncoder().encode(data)).catch(() => {});
+      this.writePty(data);
     });
     this.bindTerminalInput();
     this.bindWindowEvents();
     this.bindKeyboard();
 
-    onPtyData(id, (event) => this.onPtyEvent(event));
+    if (this.remote) this.buildConnectOverlay();
+    if (ptyId !== null) this.attachPty(ptyId);
     // O canvas avisa quando terminais são criados/removidos/trocados de área:
     // a barra de abas do terminal maximizado se mantém atualizada.
     document.addEventListener(
@@ -320,7 +344,7 @@ export class TerminalWindow {
     bar.className = "term-titlebar";
 
     const dot = document.createElement("span");
-    dot.className = `term-dot ${this.shellId}`;
+    dot.className = `term-dot ${this.remote ? "ssh" : this.shellId}`;
     bar.appendChild(dot);
 
     // Primeiro item antes das abas no modo maximizado: abre o menu do app.
@@ -474,9 +498,92 @@ export class TerminalWindow {
       if (performance.now() <= this.userInputUntil) {
         this.onUserInput?.(this.id, data);
       }
-      const encoder = new TextEncoder();
-      await writeTerminal(this.id, encoder.encode(data));
+      this.writePty(data);
     });
+  }
+
+  /** Envia ao PTY atual; sem conexão (remoto), a entrada é descartada. */
+  private writePty(data: string | Uint8Array): void {
+    if (this.ptyId === null) {
+      // Enter no terminal remoto desconectado equivale ao botão Conectar.
+      if (this.remote && data === "\r") void this.connect();
+      return;
+    }
+    const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+    void writeTerminal(this.ptyId, bytes).catch(() => {});
+  }
+
+  private attachPty(ptyId: number): void {
+    this.ptyId = ptyId;
+    onPtyData(ptyId, (event) => this.onPtyEvent(event));
+  }
+
+  /** Solta o PTY atual (encerra o processo quando `kill`). */
+  private detachPty(kill: boolean): void {
+    if (this.ptyId === null) return;
+    offPtyData(this.ptyId);
+    if (kill) void killTerminal(this.ptyId).catch(() => {});
+    this.ptyId = null;
+  }
+
+  private buildConnectOverlay(): void {
+    const overlay = document.createElement("div");
+    overlay.className = "term-connect";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "term-connect-btn";
+    button.textContent = "Conectar";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void this.connect();
+    });
+    // O mousedown no corpo foca o xterm; aqui só o clique no botão conta.
+    button.addEventListener("mousedown", (event) => event.stopPropagation());
+    const message = document.createElement("span");
+    message.className = "term-connect-msg";
+    overlay.append(button, message);
+    this.termBody.appendChild(overlay);
+    this.connectOverlay = overlay;
+    this.setConnectState("idle");
+  }
+
+  private setConnectState(state: "idle" | "connecting" | "connected", message = ""): void {
+    const overlay = this.connectOverlay;
+    if (!overlay) return;
+    overlay.classList.toggle("hidden", state === "connected");
+    overlay.classList.toggle("connecting", state === "connecting");
+    const button = overlay.querySelector<HTMLButtonElement>(".term-connect-btn");
+    if (button) {
+      button.disabled = state === "connecting";
+      button.textContent = state === "connecting" ? "Conectando…" : "Conectar";
+    }
+    const msg = overlay.querySelector<HTMLElement>(".term-connect-msg");
+    if (msg) msg.textContent = message;
+  }
+
+  /** Abre a sessão SSH do terminal remoto (botão Conectar). */
+  async connect(): Promise<void> {
+    if (!this.remote || this.disposed || this.connecting || this.ptyId !== null) return;
+    this.connecting = true;
+    this.setConnectState("connecting");
+    try {
+      const cols = this.term.cols || 80;
+      const rows = this.term.rows || 24;
+      const ptyId = await spawnSshTerminal(this.shellId, cols, rows);
+      if (this.disposed) {
+        void killTerminal(ptyId).catch(() => {});
+        return;
+      }
+      this.awaitingFirstOutput = true;
+      this.attachPty(ptyId);
+      this.lastCols = cols;
+      this.lastRows = rows;
+      this.scheduleFit();
+    } catch (err) {
+      this.setConnectState("idle", err instanceof Error ? err.message : String(err));
+    } finally {
+      this.connecting = false;
+    }
   }
 
   /**
@@ -541,7 +648,7 @@ export class TerminalWindow {
   /** Envia dados ao shell como se tivessem sido digitados aqui (broadcast). */
   sendInput(data: string): void {
     if (this.disposed) return;
-    void writeTerminal(this.id, new TextEncoder().encode(data)).catch(() => {});
+    this.writePty(data);
   }
 
   /** Liga/desliga a participação no broadcast (realce visual incluso). */
@@ -560,6 +667,8 @@ export class TerminalWindow {
 
   /** Acompanha a pasta atual do shell: OSC 7 e leitura de /proc no Linux. */
   private bindCwdTracking(): void {
+    // A pasta remota não existe neste computador: não serve para restaurar.
+    if (this.remote) return;
     const setCwd = (path: string) => {
       if (!path || path === this.currentCwd) return;
       this.currentCwd = path;
@@ -583,7 +692,8 @@ export class TerminalWindow {
     const poll = async () => {
       if (this.disposed) return;
       try {
-        const path = await terminalCwd(this.id);
+        if (this.ptyId === null) return;
+        const path = await terminalCwd(this.ptyId);
         if (path) setCwd(path);
       } catch {
         // Sessão encerrada ou plataforma sem suporte.
@@ -698,8 +808,7 @@ export class TerminalWindow {
     try {
       const text = await navigator.clipboard.readText();
       if (text) {
-        const encoder = new TextEncoder();
-        await writeTerminal(this.id, encoder.encode(text));
+        this.writePty(text);
       }
     } catch (err) {
       warnClipboard(`não foi possível colar: ${err instanceof Error ? err.message : String(err)}`);
@@ -749,13 +858,14 @@ export class TerminalWindow {
     }
     const command = this.startupCommand.trim();
     if (!command || this.disposed) return;
+    // Remoto: roda só depois que a conexão responder (ver onPtyEvent).
+    if (this.remote && (this.ptyId === null || this.awaitingFirstOutput)) return;
     this.startupTimer = setTimeout(() => {
       this.startupTimer = null;
       if (this.disposed) return;
       // Envia direto ao PTY: não mexe no foco/seleção de uma janela em segundo
       // plano e executa o comando com Enter.
-      const bytes = new TextEncoder().encode(`${command}\r`);
-      void writeTerminal(this.id, bytes).catch(() => {});
+      this.writePty(`${command}\r`);
     }, 500);
   }
 
@@ -774,12 +884,29 @@ export class TerminalWindow {
         bytes[i] = decoded.charCodeAt(i);
       }
       const text = new TextDecoder().decode(bytes);
+      if (this.awaitingFirstOutput) {
+        // Primeira resposta do servidor (prompt de senha ou o shell remoto).
+        this.awaitingFirstOutput = false;
+        this.setConnectState("connected");
+        this.scheduleStartupCommand();
+        if (this.element.classList.contains("active")) this.term.focus();
+      }
       this.term.write(text);
       this.scrollbackDirty = true;
       if (!this.element.classList.contains("active")) {
         this.setActivity(true);
       }
     } else if (event.kind === "exit") {
+      if (this.remote) {
+        // Remoto volta para o botão Conectar em vez de fechar a janela.
+        this.awaitingFirstOutput = false;
+        this.detachPty(false);
+        this.setConnectState(
+          "idle",
+          event.code ? `Conexão encerrada (código ${event.code}).` : "Conexão encerrada.",
+        );
+        return;
+      }
       this.showExitOverlay(event.code ?? undefined);
     }
   }
@@ -1273,8 +1400,15 @@ export class TerminalWindow {
   }
 
   async restart(): Promise<void> {
+    if (this.remote) {
+      // Reconecta na mesma janela (aplica a conexão editada).
+      this.awaitingFirstOutput = false;
+      this.detachPty(true);
+      await this.connect();
+      return;
+    }
     this.hideExitOverlay();
-    await killTerminal(this.id);
+    if (this.ptyId !== null) await killTerminal(this.ptyId);
     this.onRestart?.(this.getState());
     this.close();
   }
@@ -1284,8 +1418,7 @@ export class TerminalWindow {
     this.disposed = true;
     this.cancelStartupCommand();
     this.stopBackgroundWork();
-    offPtyData(this.id);
-    killTerminal(this.id);
+    this.detachPty(true);
     this.colorReporting?.dispose();
     this.term.dispose();
     this.unsubscribeTheme?.();
@@ -1298,7 +1431,7 @@ export class TerminalWindow {
     this.stopBackgroundWork();
     if (!this.disposed) {
       this.disposed = true;
-      offPtyData(this.id);
+      this.detachPty(false);
       this.colorReporting?.dispose();
       this.term.dispose();
       this.unsubscribeTheme?.();
@@ -1318,8 +1451,7 @@ export class TerminalWindow {
     this.stopBackgroundWork();
     if (!this.disposed) {
       this.disposed = true;
-      offPtyData(this.id);
-      void killTerminal(this.id).catch(() => {});
+      this.detachPty(true);
       this.colorReporting?.dispose();
       this.term.dispose();
       this.unsubscribeTheme?.();
@@ -1570,7 +1702,7 @@ export class TerminalWindow {
     if (cols !== this.lastCols || rows !== this.lastRows) {
       this.lastCols = cols;
       this.lastRows = rows;
-      resizeTerminal(this.id, cols, rows);
+      if (this.ptyId !== null) void resizeTerminal(this.ptyId, cols, rows).catch(() => {});
     }
   }
 
@@ -1594,6 +1726,11 @@ export async function createTerminal(
   h: number,
   session: TerminalSessionOptions = {},
 ): Promise<TerminalWindow> {
+  if (isSshShell(shellId)) {
+    const terminal = new TerminalWindow(canvas, null, shellId, cwd, title, x, y, w, h, session);
+    if (session.autoConnect) void terminal.connect();
+    return terminal;
+  }
   const id = await spawnTerminal(shellId, cwd, 80, 24);
   return new TerminalWindow(canvas, id, shellId, cwd, title, x, y, w, h, session);
 }

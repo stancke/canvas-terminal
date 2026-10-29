@@ -120,6 +120,30 @@ pub fn pty_spawn_internal<S: Sink>(
         default_cwd()
     };
 
+    let mut cmd = CommandBuilder::new(&shell_info.path);
+    cmd.args(&shell_info.args);
+    cmd.cwd(&cwd);
+    spawn_command(
+        state,
+        sink,
+        cmd,
+        cols,
+        rows,
+        shell_info.id,
+        &shell_info.name,
+    )
+}
+
+/// Abre um PTY executando `cmd` e registra a sessão (shell local ou `ssh`).
+pub(crate) fn spawn_command<S: Sink>(
+    state: &Arc<PtyState>,
+    sink: S,
+    mut cmd: CommandBuilder,
+    cols: u16,
+    rows: u16,
+    shell_id: String,
+    label: &str,
+) -> Result<u32, String> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -130,9 +154,6 @@ pub fn pty_spawn_internal<S: Sink>(
         })
         .map_err(|e| format!("Falha ao abrir PTY: {}", e))?;
 
-    let mut cmd = CommandBuilder::new(&shell_info.path);
-    cmd.args(&shell_info.args);
-    cmd.cwd(&cwd);
     cmd.env("TERM", "xterm-256color");
     #[cfg(unix)]
     cmd.env("COLORTERM", "truecolor");
@@ -140,7 +161,7 @@ pub fn pty_spawn_internal<S: Sink>(
     let child = pair
         .slave
         .spawn_command(cmd)
-        .map_err(|e| format!("Falha ao iniciar o shell '{}': {}", shell_info.name, e))?;
+        .map_err(|e| format!("Falha ao iniciar '{}': {}", label, e))?;
 
     // O slave deve ser dropado para garantir EOF correto no PTY.
     drop(pair.slave);
@@ -165,7 +186,7 @@ pub fn pty_spawn_internal<S: Sink>(
                 child,
                 cols,
                 rows,
-                shell_id: shell_info.id,
+                shell_id,
             },
         );
     }

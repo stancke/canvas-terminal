@@ -1533,6 +1533,7 @@ body.terminal-maximized #rail-toggle {
 .term-dot.sh { background: #8b949e; }
 .term-dot.wsl { background: #d2a8ff; }
 .term-dot.override { background: #f778ba; }
+.term-dot.ssh { background: var(--accent); }
 
 .term-name {
   flex: 1;
@@ -1755,6 +1756,63 @@ body.terminal-maximized #rail-toggle {
 
 .term-overlay button:hover {
   border-color: var(--accent);
+}
+
+/* Terminal remoto desconectado: botão Conectar grande e centralizado. */
+.term-connect {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  background: var(--overlay);
+  z-index: 5;
+}
+
+.term-connect.hidden {
+  display: none;
+}
+
+.term-connect-btn {
+  min-width: calc(180px * var(--tz, 1));
+  padding: calc(14px * var(--tz, 1)) calc(36px * var(--tz, 1));
+  background: var(--accent);
+  border: 1px solid var(--accent-dim);
+  border-radius: 8px;
+  color: var(--accent-contrast);
+  font-family: var(--font-ui);
+  font-size: calc(18px * var(--tz, 1));
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-window);
+}
+
+.term-connect-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.term-connect.connecting .term-connect-btn {
+  cursor: progress;
+  animation: term-connect-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes term-connect-pulse {
+  50% { opacity: 0.55; }
+}
+
+.term-connect-msg {
+  max-width: 90%;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+  white-space: pre-wrap;
+}
+
+.term-connect-msg:empty {
+  display: none;
 }
 
 .resize-handle {
@@ -4797,4 +4855,46 @@ body.broadcast-on .term-controls .term-broadcast {
 .layouts-save-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Formulário de conexão SSH (diálogo) e lista nas configurações. */
+.ssh-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ssh-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.ssh-field .settings-select {
+  max-width: none;
+}
+
+.ssh-row {
+  display: flex;
+  gap: 10px;
+}
+
+.ssh-grow {
+  flex: 1;
+}
+
+.ssh-port {
+  width: 90px;
+}
+
+.ssh-error {
+  color: var(--danger) !important;
+}
+
+.ssh-settings-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
 }

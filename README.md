@@ -202,6 +202,31 @@ abrir novamente, tudo volta como estava.
 
 ---
 
+## Terminais remotos (SSH)
+
+Clique com o **botão direito no canvas** → **Novo terminal remoto (SSH)...**,
+escolha uma conexão salva ou preencha servidor, porta, usuário e, se quiser,
+**senha** (ou frase-senha da chave) e o **caminho da chave privada**. O terminal
+abre já conectado.
+
+- **Ao abrir o app**, terminais remotos restaurados **não conectam sozinhos**:
+  exibem um botão grande **Conectar** no centro, que mostra **Conectando…** até
+  o servidor responder. Enter no terminal também conecta.
+- Quando a conexão cai ou o `exit` é digitado, o botão **Conectar** volta na
+  mesma janela, com o motivo do encerramento.
+- Botão direito no título do terminal remoto → **Editar conexão SSH...** e
+  **Reconectar** (aplica a conexão editada).
+- **Configurações → Conexões SSH** lista, adiciona, edita e remove conexões.
+
+O app usa o cliente `ssh` do sistema (OpenSSH; no Windows, o OpenSSH nativo),
+então `~/.ssh/config`, `known_hosts` e o agente continuam valendo. Sem senha, o
+`ssh` pergunta no próprio terminal. Com senha salva, o app a entrega como
+`SSH_ASKPASS` (requer OpenSSH 8.4+), aceita automaticamente a chave de um host
+**novo** e continua recusando chave de host alterada. A senha fica no
+`localStorage` deste computador, como os tokens das integrações.
+
+---
+
 ## Comando automático por terminal
 
 Cada terminal pode ter um comando executado automaticamente ao abrir. Para

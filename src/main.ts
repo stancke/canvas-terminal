@@ -72,6 +72,20 @@ import {
   isWorkspaceIcon,
 } from "./workspace-icons";
 import { GitPanel } from "./git-panel";
+import {
+  bindSshForm,
+  getSshHost,
+  isSshShell,
+  loadSshHosts,
+  readSshForm,
+  removeSshHost,
+  sshFormHtml,
+  sshHostIdOf,
+  sshHostLabel,
+  sshShellId,
+  upsertSshHost,
+  type SshHost,
+} from "./ssh";
 import { LayoutsPanel } from "./layouts-panel";
 import { captureLayout, slotRect, type SavedLayout } from "./layouts";
 import {
@@ -320,6 +334,10 @@ function terminalTitleFor(
   title?: string,
 ): string {
   if (title) return title;
+  if (isSshShell(shellId)) {
+    const host = getSshHost(sshHostIdOf(shellId));
+    return host ? sshHostLabel(host) : "SSH";
+  }
   const shell = shells.find((s) => s.id === shellId) || shells[0];
   return `${shell?.name ?? shellId} #${workspace.terminals.length + 1}`;
 }
@@ -423,6 +441,7 @@ async function addTerminalToWorkspace(
     w,
     h,
     startupCommand,
+    { autoConnect: true },
   );
 
   workspace.terminals.push(terminal);
@@ -710,6 +729,7 @@ type SettingsTab =
   | "general"
   | "appearance"
   | "terminal"
+  | "ssh"
   | "plugins"
   | "shortcuts"
   | "about";
@@ -718,6 +738,7 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: "general", label: "Geral" },
   { id: "appearance", label: "Aparência" },
   { id: "terminal", label: "Terminal" },
+  { id: "ssh", label: "Conexões SSH" },
   { id: "plugins", label: "Plugins" },
   { id: "shortcuts", label: "Atalhos" },
   { id: "about", label: "Sobre" },
@@ -929,6 +950,11 @@ function renderSettings(): void {
       else scrollbacks = {};
       showToast(enabled ? "Histórico dos terminais será restaurado" : "Histórico dos terminais apagado");
     });
+    return;
+  }
+
+  if (currentSettingsTab === "ssh") {
+    renderSshSettings(body);
     return;
   }
 
@@ -1298,12 +1324,15 @@ function bindMenuActions(): void {
 /* ---- Diálogos ---- */
 
 let dialogConfirmAction: (() => void) | null = null;
+/** Validação do formulário do diálogo: `false` mantém o diálogo aberto. */
+let dialogValidate: (() => boolean) | null = null;
 
 function bindDialog(): void {
   const dialog = document.getElementById("app-dialog")!;
   document.getElementById("dialog-close")?.addEventListener("click", () => closeDialog());
   document.getElementById("dialog-cancel")?.addEventListener("click", () => closeDialog());
   document.getElementById("dialog-confirm")?.addEventListener("click", () => {
+    if (dialogValidate && !dialogValidate()) return;
     const action = dialogConfirmAction;
     closeDialog();
     action?.();
@@ -1318,6 +1347,7 @@ function showDialog(title: string, html: string): void {
   document.getElementById("dialog-body")!.innerHTML = html;
   document.getElementById("dialog-footer")!.classList.add("hidden");
   dialogConfirmAction = null;
+  dialogValidate = null;
   document.getElementById("app-dialog")!.classList.remove("hidden");
 }
 
@@ -1327,8 +1357,10 @@ function showConfirm(
   html: string,
   confirmLabel: string,
   action: () => void,
+  validate?: () => boolean,
 ): void {
   showDialog(title, html);
+  dialogValidate = validate ?? null;
   document.getElementById("dialog-footer")!.classList.remove("hidden");
   const confirmButton = document.getElementById("dialog-confirm") as HTMLButtonElement;
   confirmButton.textContent = confirmLabel;
@@ -1341,6 +1373,7 @@ function closeDialog(): boolean {
   dialog.classList.add("hidden");
   document.getElementById("dialog-footer")!.classList.add("hidden");
   dialogConfirmAction = null;
+  dialogValidate = null;
   return true;
 }
 
@@ -1380,6 +1413,146 @@ function editStartupCommand(terminal: TerminalWindow): void {
         event.preventDefault();
         (document.getElementById("dialog-confirm") as HTMLButtonElement | null)?.click();
       }
+    });
+  }
+}
+
+/* ---- Terminais remotos (SSH) ---- */
+
+/**
+ * Formulário de conexão SSH no diálogo do app. A conexão é salva antes de
+ * `onSave`, porque o terminal remoto guarda só a referência `ssh:<id>`.
+ */
+function openSshDialog(
+  title: string,
+  confirmLabel: string,
+  host: SshHost | undefined,
+  onSave: (host: SshHost) => void,
+  withPicker = false,
+): void {
+  const choices = withPicker ? loadSshHosts() : [];
+  let saved: SshHost | null = null;
+  showConfirm(
+    title,
+    sshFormHtml(host ?? choices[0], choices),
+    confirmLabel,
+    () => {
+      if (saved) onSave(saved);
+    },
+    () => {
+      const body = document.getElementById("dialog-body")!;
+      const result = readSshForm(body);
+      if (typeof result === "string") {
+        const error = document.getElementById("ssh-error");
+        if (error) {
+          error.textContent = result;
+          error.hidden = false;
+        }
+        return false;
+      }
+      upsertSshHost(result);
+      saved = result;
+      return true;
+    },
+  );
+
+  const body = document.getElementById("dialog-body")!;
+  bindSshForm(body, choices);
+  body.querySelector(".ssh-form")?.addEventListener("keydown", (event) => {
+    const e = event as KeyboardEvent;
+    if (e.key !== "Enter" || (e.target as HTMLElement).tagName === "SELECT") return;
+    e.preventDefault();
+    (document.getElementById("dialog-confirm") as HTMLButtonElement | null)?.click();
+  });
+  body.querySelector<HTMLInputElement>("#ssh-host")?.focus();
+}
+
+function newRemoteTerminal(point: { x: number; y: number }): void {
+  openSshDialog("Novo terminal remoto", "Conectar", undefined, (host) => {
+    addTerminal(
+      sshShellId(host),
+      point.x,
+      point.y,
+      DEFAULT_W,
+      DEFAULT_H,
+      undefined,
+      sshHostLabel(host),
+    ).catch((err) => showToast(`Falha ao abrir o terminal remoto: ${err}`));
+  }, true);
+}
+
+function editTerminalConnection(terminal: TerminalWindow): void {
+  const host = getSshHost(sshHostIdOf(terminal.shellId));
+  if (!host) {
+    showToast("A conexão deste terminal foi removida.");
+    return;
+  }
+  openSshDialog("Editar conexão SSH", "Salvar", host, () => {
+    flashHint("Conexão salva. Use Reconectar para aplicar.");
+  });
+}
+
+function renderSshSettings(body: HTMLElement): void {
+  const hosts = loadSshHosts();
+  const rows = hosts
+    .map(
+      (host) => `
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <span class="settings-row-title">${escapeHtml(sshHostLabel(host))}</span>
+            <span class="settings-row-desc">
+              ${escapeHtml(host.user ? `${host.user}@${host.host}` : host.host)}:${host.port}
+              · ${host.identityFile ? `chave ${escapeHtml(host.identityFile)}` : "sem chave"}
+              · ${host.password ? "senha salva" : "sem senha"}
+            </span>
+          </div>
+          <div class="ssh-settings-actions">
+            <button class="settings-button" type="button" data-ssh-edit="${escapeHtml(host.id)}">Editar</button>
+            <button class="settings-button" type="button" data-ssh-remove="${escapeHtml(host.id)}">Remover</button>
+          </div>
+        </div>`,
+    )
+    .join("");
+  body.innerHTML = `
+    <h3>Conexões SSH</h3>
+    <p class="settings-intro">
+      Servidores usados pelos terminais remotos (botão direito no canvas →
+      Novo terminal remoto). Ao abrir o app, os terminais remotos esperam o
+      botão Conectar. As senhas ficam salvas neste computador.
+    </p>
+    <div class="settings-panel">
+      ${rows || `<p class="settings-status">Nenhuma conexão salva.</p>`}
+    </div>
+    <div class="settings-shortcuts-footer">
+      <button id="ssh-add" class="settings-button" type="button">Adicionar conexão</button>
+    </div>
+  `;
+  const rerender = () => {
+    if (currentSettingsTab === "ssh") renderSshSettings(body);
+  };
+  document.getElementById("ssh-add")?.addEventListener("click", () => {
+    openSshDialog("Nova conexão SSH", "Salvar", undefined, rerender);
+  });
+  for (const button of body.querySelectorAll<HTMLButtonElement>("[data-ssh-edit]")) {
+    button.addEventListener("click", () => {
+      const host = getSshHost(button.dataset.sshEdit ?? "");
+      if (host) openSshDialog("Editar conexão SSH", "Salvar", host, rerender);
+    });
+  }
+  for (const button of body.querySelectorAll<HTMLButtonElement>("[data-ssh-remove]")) {
+    button.addEventListener("click", () => {
+      const host = getSshHost(button.dataset.sshRemove ?? "");
+      if (!host) return;
+      showConfirm(
+        "Remover conexão",
+        `<p>Remover <strong>${escapeHtml(sshHostLabel(host))}</strong>? Terminais
+         remotos que usam esta conexão não conseguirão mais conectar.</p>`,
+        "Remover",
+        () => {
+          removeSshHost(host.id);
+          rerender();
+        },
+      );
     });
   }
 }
@@ -3432,6 +3605,7 @@ async function showEmptyContextMenu(point: { x: number; y: number }): Promise<vo
 
   const items = [
     { label: "Novo terminal aqui", action: () => addTerminal(selectedShell(), point.x, point.y, DEFAULT_W, DEFAULT_H) },
+    { label: "Novo terminal remoto (SSH)...", action: () => newRemoteTerminal(point) },
     { label: "Organizar em cascata", action: () => organizeTerminals() },
     { label: "Centralizar vista", action: () => centerView() },
     { label: "Colar terminal", action: () => addTerminal(selectedShell(), point.x, point.y, DEFAULT_W, DEFAULT_H), disabled: !hasClipboard },
@@ -3463,7 +3637,12 @@ function showTitlebarContextMenu(x: number, y: number, terminal: TerminalWindow)
         : "Comando de inicialização...",
       action: () => editStartupCommand(terminal),
     },
-    { label: "Reiniciar", action: () => terminal.restart() },
+    ...(terminal.remote
+      ? [
+          { label: "Editar conexão SSH...", action: () => editTerminalConnection(terminal) },
+          { label: "Reconectar", action: () => void terminal.restart() },
+        ]
+      : [{ label: "Reiniciar", action: () => void terminal.restart() }]),
     { label: terminal.maximized ? "Restaurar" : "Maximizar", action: () => terminal.toggleMaximize() },
     { label: "Fechar", action: () => terminal.close() },
   ];

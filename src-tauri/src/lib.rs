@@ -6,6 +6,7 @@ pub mod git;
 pub mod links;
 pub mod pty;
 pub mod shells;
+pub mod ssh;
 pub mod usage;
 
 use clickup::{
@@ -19,6 +20,7 @@ use pty::{
     PtyState, pty_alive, pty_cwd, pty_default_cwd, pty_kill, pty_kill_all, pty_list_shells,
     pty_resize, pty_spawn, pty_write,
 };
+use ssh::pty_spawn_ssh;
 use std::sync::Arc;
 use tauri::{Builder, RunEvent, generate_context, generate_handler};
 use usage::usage_report;
@@ -37,6 +39,7 @@ pub fn run() {
         .invoke_handler(generate_handler![
             pty_list_shells,
             pty_spawn,
+            pty_spawn_ssh,
             pty_write,
             pty_resize,
             pty_kill,
