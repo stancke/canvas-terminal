@@ -127,7 +127,7 @@ fn find_ssh() -> Option<PathBuf> {
 }
 
 /// Abre um PTY com `ssh` conectado ao servidor.
-pub fn pty_spawn_ssh_internal<S: Sink>(
+pub fn pty_spawn_ssh_internal<S: Sink + Clone>(
     state: &Arc<PtyState>,
     sink: S,
     target: SshTarget,

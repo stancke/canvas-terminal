@@ -44,7 +44,10 @@ impl Sink for Arc<Mutex<Vec<PtyEvent>>> {
 pub struct Session {
     pub writer: Box<dyn Write + Send>,
     pub master: Box<dyn MasterPty + Send>,
-    pub child: Box<dyn Child + Send>,
+    /// Compartilhado com a thread que vigia o fim do processo: no Windows a
+    /// leitura do PTY não termina sozinha, então quem descobre a saída é o
+    /// `try_wait` sobre este `child`.
+    pub child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     pub cols: u16,
     pub rows: u16,
     pub shell_id: String,
@@ -93,7 +96,7 @@ pub fn pty_default_cwd() -> Result<String, String> {
 }
 
 /// Abre um novo PTY executando o shell solicitado.
-pub fn pty_spawn_internal<S: Sink>(
+pub fn pty_spawn_internal<S: Sink + Clone>(
     state: &Arc<PtyState>,
     sink: S,
     shell: Option<String>,
@@ -135,7 +138,7 @@ pub fn pty_spawn_internal<S: Sink>(
 }
 
 /// Abre um PTY executando `cmd` e registra a sessão (shell local ou `ssh`).
-pub(crate) fn spawn_command<S: Sink>(
+pub(crate) fn spawn_command<S: Sink + Clone>(
     state: &Arc<PtyState>,
     sink: S,
     mut cmd: CommandBuilder,
@@ -176,6 +179,7 @@ pub(crate) fn spawn_command<S: Sink>(
         .try_clone_reader()
         .map_err(|e| format!("Falha ao obter leitor do PTY: {}", e))?;
 
+    let child = Arc::new(Mutex::new(child));
     {
         let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.insert(
@@ -183,7 +187,7 @@ pub(crate) fn spawn_command<S: Sink>(
             Session {
                 writer,
                 master,
-                child,
+                child: Arc::clone(&child),
                 cols,
                 rows,
                 shell_id,
@@ -191,20 +195,27 @@ pub(crate) fn spawn_command<S: Sink>(
         );
     }
 
-    let state_for_thread = Arc::clone(state);
+    // Duas threads por sessão: uma só lê a saída; a outra descobre quando o
+    // processo termina e emite `exit`. Separar é obrigatório no Windows porque
+    // a leitura do ConPTY fica bloqueada depois que o processo filho sai — sem
+    // isso o frontend nunca sabe que o terminal acabou (não volta o botão
+    // Conectar nem o aviso "Processo finalizado").
+    let reader_sink = sink.clone();
     std::thread::spawn(move || {
-        pty_reader_loop(id, state_for_thread, reader, sink);
+        pty_reader_loop(id, reader, reader_sink);
+    });
+
+    let state_for_watcher = Arc::clone(state);
+    std::thread::spawn(move || {
+        pty_exit_watcher(id, state_for_watcher, sink, child);
     });
 
     Ok(id)
 }
 
-fn pty_reader_loop<S: Sink>(
-    id: u32,
-    state: Arc<PtyState>,
-    mut reader: Box<dyn Read + Send>,
-    sink: S,
-) {
+/// Lê a saída do PTY até o descritor fechar (o pseudoconsole é fechado pelo
+/// vigia) e repassa cada bloco ao `sink`.
+fn pty_reader_loop<S: Sink>(id: u32, mut reader: Box<dyn Read + Send>, sink: S) {
     let mut buf = [0u8; 16 * 1024];
     let mut pending = Vec::new();
 
@@ -226,21 +237,44 @@ fn pty_reader_loop<S: Sink>(
     }
 
     flush_pending(id, &mut pending, &sink);
+}
 
-    let code = {
-        let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(mut session) = sessions.remove(&id) {
-            session.child.wait().ok().map(|s| s.exit_code() as i32)
-        } else {
-            None
+/// Vigia o processo da sessão e emite `exit` quando ele termina.
+fn pty_exit_watcher<S: Sink>(
+    id: u32,
+    state: Arc<PtyState>,
+    sink: S,
+    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+) {
+    let code = loop {
+        let status = {
+            let mut child = child.lock().unwrap_or_else(|e| e.into_inner());
+            child.try_wait()
+        };
+        match status {
+            Ok(Some(status)) => break status.exit_code() as i32,
+            // Processo morto sem código legível: segue como saída com erro.
+            Err(_) => break 1,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(120)),
         }
     };
+
+    // Dá tempo de a thread de leitura drenar a última saída (o adeus do `ssh`,
+    // por exemplo) antes de fechar o pseudoconsole.
+    std::thread::sleep(std::time::Duration::from_millis(120));
+
+    // Remover a sessão solta o `master` e fecha o pseudoconsole, que é o que
+    // faz a leitura terminar.
+    {
+        let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        sessions.remove(&id);
+    }
 
     sink.emit(&PtyEvent {
         id,
         kind: "exit".into(),
         data: None,
-        code,
+        code: Some(code),
     });
 }
 
@@ -342,8 +376,10 @@ pub fn pty_kill(state: tauri::State<'_, Arc<PtyState>>, id: u32) -> Result<(), S
 
 pub fn pty_kill_internal(state: &Arc<PtyState>, id: u32) -> Result<(), String> {
     let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(mut session) = sessions.remove(&id) {
-        let _ = session.child.kill();
+    if let Some(session) = sessions.remove(&id) {
+        // O vigia percebe o término e emite `exit` como em qualquer saída.
+        let mut child = session.child.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = child.kill();
     }
     Ok(())
 }
@@ -390,9 +426,13 @@ pub fn pty_cwd(state: tauri::State<'_, Arc<PtyState>>, id: u32) -> Result<Option
 pub fn pty_cwd_internal(state: &Arc<PtyState>, id: u32) -> Result<Option<String>, String> {
     let pid = {
         let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        sessions
-            .get(&id)
-            .and_then(|session| session.child.process_id())
+        sessions.get(&id).and_then(|session| {
+            session
+                .child
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .process_id()
+        })
     };
     Ok(pid.and_then(process_cwd))
 }
