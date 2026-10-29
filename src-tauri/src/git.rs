@@ -1,14 +1,17 @@
-//! Integração somente-leitura com o Git: status e diffs para o painel lateral.
+//! Integração somente-leitura com o Git: status, diffs e PRs do GitHub/GitLab
+//! para o painel lateral.
 //!
 //! Os comandos recebem a pasta da área de trabalho e executam o binário `git`
 //! com argumentos fixos (nunca flags vindas da interface). O frontend só exibe
-//! o resultado.
+//! o resultado. PRs são buscados via HTTP usando `reqwest`.
 
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
+use std::time::Duration;
 
 /// Tamanho máximo de um diff devolvido ao frontend.
 const MAX_DIFF_BYTES: usize = 512 * 1024;
@@ -328,4 +331,151 @@ pub fn git_diff(dir: String, path: String, staged: bool) -> Result<String, Strin
     Ok(truncate_diff(
         String::from_utf8_lossy(&output.stdout).to_string(),
     ))
+}
+
+/* ---- GitHub / GitLab PRs ---- */
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteInfo {
+    pub url: String,
+    pub provider: String,
+    pub owner: String,
+    pub repo: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequest {
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub url: String,
+}
+
+#[tauri::command]
+pub fn git_remote_url(dir: String) -> Result<RemoteInfo, String> {
+    let root = repository_root(Path::new(&dir))?;
+    let output = run_git(&root, &["remote", "get-url", "origin"])?;
+    if !output.status.success() {
+        return Err("Repositório sem remote 'origin'.".to_string());
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    parse_remote_url(&url).ok_or_else(|| "Remote não reconhecido como GitHub ou GitLab.".to_string())
+}
+
+fn parse_remote_url(url: &str) -> Option<RemoteInfo> {
+    // HTTPS: https://github.com/owner/repo.git
+    // SSH: git@github.com:owner/repo.git
+    let cleaned = url
+        .trim()
+        .replace("https://", "")
+        .replace("http://", "")
+        .replace("git@", "");
+
+    let (host, path) = if cleaned.contains(':') && !cleaned.starts_with("http") {
+        cleaned.split_once(':')?
+    } else {
+        cleaned.split_once('/')?
+    };
+
+    let provider = if host.contains("github") {
+        "github"
+    } else if host.contains("gitlab") {
+        "gitlab"
+    } else {
+        return None;
+    };
+
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let owner = parts[0].to_string();
+    let repo = parts[1].trim_end_matches(".git").to_string();
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+
+    Some(RemoteInfo {
+        url: url.to_string(),
+        provider: provider.to_string(),
+        owner,
+        repo,
+    })
+}
+
+static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn http_client() -> Result<&'static reqwest::Client, String> {
+    if let Some(client) = HTTP.get() {
+        return Ok(client);
+    }
+    let built = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent("CanvasTerminal/0.1")
+        .build()
+        .map_err(|err| format!("cliente HTTP: {err}"))?;
+    let _ = HTTP.set(built);
+    HTTP.get().ok_or_else(|| "cliente HTTP indisponível".to_string())
+}
+
+/// Lista PRs abertos do GitHub. Para GitLab ainda retorna erro
+/// (pode ser expandido no futuro).
+#[tauri::command]
+pub async fn git_pull_requests(
+    owner: String,
+    repo: String,
+    token: Option<String>,
+) -> Result<Vec<PullRequest>, String> {
+    let mut request = http_client()?
+        .get(format!(
+            "https://api.github.com/repos/{owner}/{repo}/pulls?state=open&per_page=20"
+        ))
+        .header("Accept", "application/vnd.github+json");
+
+    if let Some(token) = token.filter(|t| !t.is_empty()) {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|err| format!("falha ao buscar PRs: {err}"))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|err| format!("resposta inválida: {err}"))?;
+
+    if !status.is_success() {
+        return Err(match status.as_u16() {
+            401 => "Token do GitHub inválido ou expirado.".to_string(),
+            403 => "Limite de requisições atingido ou sem permissão.".to_string(),
+            404 => "Repositório não encontrado.".to_string(),
+            code => format!("GitHub respondeu {code}: {body}"),
+        });
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|err| format!("JSON inválido do GitHub: {err}"))?;
+
+    let array = parsed.as_array().ok_or("resposta inesperada do GitHub")?;
+    Ok(array
+        .iter()
+        .filter_map(|item| {
+            Some(PullRequest {
+                number: item.get("number")?.as_u64()?,
+                title: item.get("title")?.as_str()?.to_string(),
+                author: item
+                    .get("user")
+                    .and_then(|user| user.get("login"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                url: item.get("html_url")?.as_str()?.to_string(),
+            })
+        })
+        .collect())
 }

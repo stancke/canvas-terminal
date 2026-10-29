@@ -31,6 +31,7 @@ interface FolderListing {
 
 /** Pasta rastreada pelo painel: escolhida uma vez e lembrada para sempre. */
 const GIT_FOLDER_KEY = "canvas-terminal.git-folder.v1";
+const GIT_TOKEN_KEY = "canvas-terminal.git-token.v1";
 
 /** Limite defensivo: diffs gigantes não travam o modal. */
 const MAX_DIFF_LINES = 4000;
@@ -102,19 +103,33 @@ export class GitPanel {
   private pickerParent: string | null = null;
   private pickerToken = 0;
   private pickerBusy = false;
+  private remote: { url: string; provider: string; owner: string; repo: string } | null = null;
+  private pullRequests: { number: number; title: string; author: string; url: string }[] = [];
+  private prBusy = false;
+  private prError: string | null = null;
+  private prsVisible = false;
+  private gitToken = "";
 
   constructor(modal: HTMLElement, defaultFolder: () => Promise<string>) {
     this.modal = modal;
     this.defaultFolder = defaultFolder;
     try {
       this.savedFolder = localStorage.getItem(GIT_FOLDER_KEY) ?? "";
+      this.gitToken = localStorage.getItem(GIT_TOKEN_KEY) ?? "";
     } catch {
       this.savedFolder = "";
+      this.gitToken = "";
     }
 
     this.modal
       .querySelector("#git-modal-close")
       ?.addEventListener("click", () => this.closeModal());
+    this.modal
+      .querySelector("#git-prs-toggle")
+      ?.addEventListener("click", () => this.togglePrs());
+    this.modal
+      .querySelector("#git-prs-refresh")
+      ?.addEventListener("click", () => void this.loadPullRequests());
     this.modal
       .querySelector("#git-refresh")
       ?.addEventListener("click", () => {
@@ -151,6 +166,12 @@ export class GitPanel {
 
   open(): void {
     this.modal.classList.remove("hidden");
+    this.prsVisible = false;
+    this.modal.querySelector("#git-diff")?.classList.remove("hidden");
+    this.modal.querySelector("#git-prs")?.classList.add("hidden");
+    this.modal.querySelector("#git-prs-toggle")?.classList.remove("active");
+    const tokenInput = this.modal.querySelector<HTMLInputElement>("#git-token");
+    if (tokenInput) tokenInput.value = this.gitToken;
     if (!this.savedFolder) {
       this.renderNoFolderState();
       void this.openPicker();
@@ -711,5 +732,101 @@ export class GitPanel {
       note.append(strong, detail);
       container.appendChild(note);
     }
+  }
+
+  /* ---- Pull requests ---- */
+
+  private togglePrs(): void {
+    this.prsVisible = !this.prsVisible;
+    this.modal.querySelector("#git-diff")?.classList.toggle("hidden", this.prsVisible);
+    this.modal.querySelector("#git-prs")?.classList.toggle("hidden", !this.prsVisible);
+    const toggle = this.modal.querySelector<HTMLButtonElement>("#git-prs-toggle");
+    if (toggle) toggle.classList.toggle("active", this.prsVisible);
+    if (this.prsVisible) void this.loadPullRequests();
+  }
+
+  private async loadPullRequests(): Promise<void> {
+    const list = this.modal.querySelector<HTMLElement>("#git-prs-list");
+    const input = this.modal.querySelector<HTMLInputElement>("#git-token");
+    if (!list) return;
+
+    if (input && input.value !== this.gitToken) {
+      this.gitToken = input.value;
+      try {
+        localStorage.setItem(GIT_TOKEN_KEY, this.gitToken);
+      } catch {
+        // Ignora.
+      }
+    }
+
+    if (this.prBusy) return;
+    this.prBusy = true;
+    this.modal.querySelector<HTMLButtonElement>("#git-prs-refresh")?.classList.add("busy");
+    this.prError = null;
+    list.innerHTML = "";
+    list.appendChild(this.message("Buscando PRs…", "git-pr-empty"));
+
+    try {
+      if (!this.remote) {
+        this.remote = await invoke<{ url: string; provider: string; owner: string; repo: string }>(
+          "git_remote_url",
+          { dir: this.savedFolder },
+        );
+      }
+      if (this.remote.provider !== "github") {
+        throw new Error("Pull requests só são suportados no GitHub por enquanto.");
+      }
+      this.pullRequests = await invoke<{ number: number; title: string; author: string; url: string }[]>(
+        "git_pull_requests",
+        {
+          owner: this.remote.owner,
+          repo: this.remote.repo,
+          token: this.gitToken || null,
+        },
+      );
+      this.renderPullRequests();
+    } catch (error) {
+      this.prError = String(error);
+      list.innerHTML = "";
+      list.appendChild(this.message(this.prError, "git-pr-empty"));
+    } finally {
+      this.prBusy = false;
+      this.modal.querySelector<HTMLButtonElement>("#git-prs-refresh")?.classList.remove("busy");
+    }
+  }
+
+  private renderPullRequests(): void {
+    const list = this.modal.querySelector<HTMLElement>("#git-prs-list");
+    if (!list) return;
+    list.innerHTML = "";
+
+    if (this.pullRequests.length === 0) {
+      list.appendChild(this.message("Nenhum PR aberto.", "git-pr-empty"));
+      return;
+    }
+
+    for (const pr of this.pullRequests) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "git-pr";
+      const title = document.createElement("span");
+      title.className = "git-pr-title";
+      title.textContent = pr.title;
+      const meta = document.createElement("span");
+      meta.className = "git-pr-meta";
+      meta.textContent = `#${pr.number} · ${pr.author}`;
+      row.append(title, meta);
+      row.addEventListener("click", () => {
+        if (pr.url) window.open(pr.url, "_blank", "noopener");
+      });
+      list.appendChild(row);
+    }
+  }
+
+  private message(text: string, className: string): HTMLElement {
+    const p = document.createElement("p");
+    p.className = className;
+    p.textContent = text;
+    return p;
   }
 }

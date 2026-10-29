@@ -15,7 +15,9 @@ export type ThemeName =
   | "one-light"
   | "one-dark"
   | "apple-light"
-  | "apple-dark";
+  | "apple-dark"
+  | "neon-retro"
+  | "matrix";
 
 export interface XtermPalette {
   background: string;
@@ -57,7 +59,7 @@ export interface ThemeDefinition {
   terminal: XtermPalette;
 }
 
-export type ThemeGroupName = "Catppuccin" | "One" | "Apple";
+export type ThemeGroupName = "Catppuccin" | "One" | "Apple" | "Retro";
 
 export const THEME_GROUPS: Array<{ label: ThemeGroupName; themes: ThemeName[] }> = [
   {
@@ -71,6 +73,7 @@ export const THEME_GROUPS: Array<{ label: ThemeGroupName; themes: ThemeName[] }>
   },
   { label: "One", themes: ["one-light", "one-dark"] },
   { label: "Apple", themes: ["apple-light", "apple-dark"] },
+  { label: "Retro", themes: ["neon-retro", "matrix"] },
 ];
 
 const THEMES: Record<ThemeName, ThemeDefinition> = {
@@ -311,6 +314,66 @@ const THEMES: Record<ThemeName, ThemeDefinition> = {
       brightBlue: "#409cff",
       brightMagenta: "#da8fff",
       brightCyan: "#70d7ff",
+      brightWhite: "#ffffff",
+    },
+  },
+  "neon-retro": {
+    id: "neon-retro",
+    name: "Neon Retro",
+    group: "Retro",
+    mode: "dark",
+    preview: { background: "#0a0a12", surface: "#111122", accent: "#00f0ff", text: "#e0f7ff" },
+    terminal: {
+      background: "#0a0a12",
+      foreground: "#e0f7ff",
+      cursor: "#00f0ff",
+      cursorAccent: "#0a0a12",
+      selectionBackground: "#1f1f35",
+      black: "#1a1a2e",
+      red: "#ff2a6d",
+      green: "#05ffa1",
+      yellow: "#ffee00",
+      blue: "#00f0ff",
+      magenta: "#ff00ff",
+      cyan: "#00f0ff",
+      white: "#c8e6ff",
+      brightBlack: "#3a3a5c",
+      brightRed: "#ff5c8a",
+      brightGreen: "#5cffc3",
+      brightYellow: "#fff566",
+      brightBlue: "#5cffff",
+      brightMagenta: "#ff5cff",
+      brightCyan: "#5cffff",
+      brightWhite: "#ffffff",
+    },
+  },
+  matrix: {
+    id: "matrix",
+    name: "Matrix",
+    group: "Retro",
+    mode: "dark",
+    preview: { background: "#000000", surface: "#051005", accent: "#00ff41", text: "#e8ffe8" },
+    terminal: {
+      background: "#000000",
+      foreground: "#00ff41",
+      cursor: "#00ff41",
+      cursorAccent: "#000000",
+      selectionBackground: "#0a280a",
+      black: "#001a00",
+      red: "#ff3333",
+      green: "#00ff41",
+      yellow: "#ccff00",
+      blue: "#008f11",
+      magenta: "#00ff41",
+      cyan: "#00ff41",
+      white: "#e8ffe8",
+      brightBlack: "#003b00",
+      brightRed: "#ff6666",
+      brightGreen: "#33ff66",
+      brightYellow: "#dfff33",
+      brightBlue: "#00b815",
+      brightMagenta: "#33ff66",
+      brightCyan: "#33ff66",
       brightWhite: "#ffffff",
     },
   },

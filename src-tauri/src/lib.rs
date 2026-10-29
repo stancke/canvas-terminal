@@ -12,7 +12,7 @@ use clickup::{
     clickup_task, clickup_tasks, clickup_teams, clickup_user,
 };
 use folders::list_folders;
-use git::{git_diff, git_status};
+use git::{git_diff, git_pull_requests, git_remote_url, git_status};
 use pty::{
     PtyState, pty_alive, pty_default_cwd, pty_kill, pty_kill_all, pty_list_shells, pty_resize,
     pty_spawn, pty_write,
@@ -53,6 +53,8 @@ pub fn run() {
             clickup_comments,
             git_status,
             git_diff,
+            git_remote_url,
+            git_pull_requests,
             list_folders,
         ])
         .build(generate_context!())

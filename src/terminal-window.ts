@@ -97,6 +97,7 @@ export class TerminalWindow {
   private term: Terminal;
   private termBody: HTMLDivElement;
   private titleEl!: HTMLSpanElement;
+  private activityBadge!: HTMLSpanElement;
   private tabsEl!: HTMLDivElement;
   private menuBtn!: HTMLButtonElement;
   private overlay!: HTMLDivElement;
@@ -225,6 +226,11 @@ export class TerminalWindow {
     this.titleEl.className = "term-name";
     this.titleEl.textContent = this.title;
     bar.appendChild(this.titleEl);
+
+    this.activityBadge = document.createElement("span");
+    this.activityBadge.className = "term-activity";
+    this.activityBadge.title = "Nova saída";
+    bar.appendChild(this.activityBadge);
 
     // Abas com os terminais da área: visíveis só quando a janela é maximizada.
     this.tabsEl = document.createElement("div");
@@ -459,6 +465,9 @@ export class TerminalWindow {
       }
       const text = new TextDecoder().decode(bytes);
       this.term.write(text);
+      if (!this.element.classList.contains("active")) {
+        this.setActivity(true);
+      }
     } else if (event.kind === "exit") {
       this.showExitOverlay(event.code ?? undefined);
     }
@@ -516,7 +525,13 @@ export class TerminalWindow {
     this.term.focus();
     this.element.classList.add("active");
     this.bringToFront();
+    this.setActivity(false);
     this.onFocus?.(this.id);
+  }
+
+  /** Marca ou limpa o indicador de nova saída no título. */
+  private setActivity(active: boolean): void {
+    this.activityBadge?.classList.toggle("active", active);
   }
 
   /** Recalcula colunas/linhas após uma mudança de geometria externa. */

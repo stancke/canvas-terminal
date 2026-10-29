@@ -347,6 +347,14 @@ export class ClickUpPlugin {
       event.preventDefault();
       this.toggle();
     });
+
+    const hotzone = document.getElementById("clickup-hotzone")!;
+    hotzone.addEventListener("click", () => this.toggle());
+    hotzone.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      this.toggle();
+    });
     this.configButton?.addEventListener("click", (event) => {
       event.stopPropagation();
       this.view = "select";

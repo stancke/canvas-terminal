@@ -167,6 +167,19 @@
           </svg>
         </button>
         <button
+          id="rail-clickup"
+          class="rail-button rail-plugin-button"
+          type="button"
+          title="ClickUp"
+          aria-label="ClickUp"
+          aria-haspopup="dialog"
+          aria-controls="clickup-modal"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 4.5 5 6.6 8 3l3 3.6 2-2.1M3 11.5 5 9.4 8 13l3-3.6 2 2.1" />
+          </svg>
+        </button>
+        <button
           id="rail-token-usage"
           class="rail-button rail-plugin-button"
           type="button"
@@ -180,13 +193,13 @@
           </svg>
         </button>
         <button
-          id="rail-clickup"
-          class="rail-button rail-plugin-button"
+          id="rail-git"
+          class="rail-button"
           type="button"
-          title="ClickUp"
-          aria-label="ClickUp"
+          title="Alterações do Git"
+          aria-label="Alterações do Git"
           aria-haspopup="dialog"
-          aria-controls="clickup-modal"
+          aria-controls="git-modal"
         >
           <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 4.5 5 6.6 8 3l3 3.6 2-2.1M3 11.5 5 9.4 8 13l3-3.6 2 2.1" />
@@ -414,11 +427,26 @@
             </svg>
           </button>
           <button id="git-refresh" class="plugin-icon" type="button" title="Atualizar">⟳</button>
+          <button id="git-prs-toggle" class="plugin-icon" type="button" title="Pull requests">PR</button>
           <button id="git-modal-close" class="plugin-icon" type="button" title="Fechar (Esc)">×</button>
         </div>
         <div class="git-modal-body">
           <aside id="git-file-list" class="git-file-list" aria-label="Arquivos alterados"></aside>
           <section id="git-diff" class="git-diff" aria-label="Diferenças do arquivo"></section>
+          <section id="git-prs" class="git-prs hidden" aria-label="Pull requests">
+            <div class="git-prs-header">
+              <input
+                id="git-token"
+                class="git-token-input"
+                type="password"
+                placeholder="Token do GitHub (opcional)"
+                aria-label="Token do GitHub"
+              />
+              <button id="git-prs-refresh" class="plugin-icon" type="button" title="Buscar PRs">⟳</button>
+            </div>
+            <p class="git-prs-hint">Token necessário apenas para repositórios privados ou para evitar limite de requisições.</p>
+            <div id="git-prs-list" class="git-prs-list"></div>
+          </section>
 
           <!-- Seletor da pasta rastreada; fica por cima da lista/diff. -->
           <div id="git-picker" class="git-picker hidden">
@@ -486,6 +514,20 @@
         <path d="M6 5.9v12.2M18 9.4a9 9 0 0 1-9 9" />
       </svg>
     </div>
+
+    <div
+      id="clickup-hotzone"
+      role="button"
+      tabindex="0"
+      aria-label="ClickUp"
+      aria-controls="clickup-modal"
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 4.5 5 6.6 8 3l3 3.6 2-2.1M3 11.5 5 9.4 8 13l3-3.6 2 2.1" />
+      </svg>
+    </div>
+
+    <canvas id="minimap" aria-label="Mini-mapa do canvas"></canvas>
 
     <aside id="quick-panel" aria-label="Comandos rápidos">
       <div class="quick-header">

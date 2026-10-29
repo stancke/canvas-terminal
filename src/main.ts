@@ -41,6 +41,18 @@ import {
 } from "./plugins";
 import { TokenUsageModal } from "./token-usage";
 import { ClickUpPlugin } from "./clickup";
+import { Minimap } from "./minimap";
+import {
+  allActions,
+  capture,
+  format,
+  getBinding,
+  getLabel,
+  matches,
+  resetBindings,
+  setBinding,
+  type ShortcutAction,
+} from "./shortcuts";
 import {
   applyTheme,
   currentTheme,
@@ -99,6 +111,7 @@ let pluginSettings: PluginSettings = { enabled: {} };
 let tokenUsageModal: TokenUsageModal | null = null;
 let clickUpPlugin: ClickUpPlugin | null = null;
 let gitPanel: GitPanel | null = null;
+let minimap: Minimap | null = null;
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 let workspaces: Workspace[] = [];
@@ -151,9 +164,11 @@ async function main(): Promise<void> {
   });
 
   canvas = new Canvas("#viewport", "#world");
+  minimap = new Minimap(canvas);
   canvas.onEmptyContextMenu = showEmptyContextMenu;
   canvas.onViewChange = () => {
     updateStatus();
+    minimap?.update();
     persist();
   };
 
@@ -175,6 +190,7 @@ async function main(): Promise<void> {
   );
   // Abrir outro modal fecha o Git (e vice-versa pelo botão do Git).
   document.addEventListener("plugin-panel-opened", () => gitPanel?.close());
+  document.addEventListener("canvas-terminals-changed", () => minimap?.update());
 
   // Atalho flutuante de diff do Git no modo maximizado (canto superior direito).
   const gitDiffHotzone = document.getElementById("git-diff-hotzone")!;
@@ -911,16 +927,87 @@ function renderSettings(): void {
     return;
   }
 
-  body.innerHTML = `
-    <h3>Atalhos</h3>
-    <p class="settings-intro">Atalhos globais do aplicativo.</p>
-    <table class="settings-shortcuts">
-      ${SHORTCUT_ROWS.map(
-        ([label, shortcut]) =>
-          `<tr><td>${label}</td><td>${shortcut}</td></tr>`,
-      ).join("")}
-    </table>
-  `;
+  if (currentSettingsTab === "shortcuts") {
+    body.innerHTML = `
+      <h3>Atalhos</h3>
+      <p class="settings-intro">
+        Clique em uma combinação e pressione as teclas para redefinir.
+      </p>
+      <table class="settings-shortcuts">
+        ${allActions()
+          .map(
+            (action) => `
+              <tr data-action="${action}">
+                <td>${getLabel(action)}</td>
+                <td>
+                  <button
+                    class="settings-shortcut-value"
+                    type="button"
+                    data-action="${action}"
+                  >${format(getBinding(action))}</button>
+                </td>
+              </tr>
+            `,
+          )
+          .join("")}
+      </table>
+      <div class="settings-shortcuts-footer">
+        <button id="shortcuts-reset" class="settings-button" type="button">
+          Restaurar padrão
+        </button>
+      </div>
+    `;
+
+    for (const button of body.querySelectorAll<HTMLButtonElement>(".settings-shortcut-value")) {
+      button.addEventListener("click", () => startShortcutCapture(button));
+    }
+
+    body.querySelector("#shortcuts-reset")?.addEventListener("click", () => {
+      resetBindings();
+      renderSettings();
+      showToast("Atalhos restaurados");
+    });
+    return;
+  }
+}
+
+function startShortcutCapture(button: HTMLButtonElement): void {
+  const action = button.dataset.action as ShortcutAction;
+  const original = button.textContent ?? "";
+  button.textContent = "Pressione as teclas…";
+  button.classList.add("capturing");
+
+  const handler = (event: KeyboardEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const captured = capture(event);
+    if (!captured) return;
+
+    // Tab sem modificadores é usado na navegação; não permite.
+    if (captured.key === "tab" && !captured.ctrl && !captured.alt && !captured.shift) {
+      return;
+    }
+
+    window.removeEventListener("keydown", handler, true);
+    button.classList.remove("capturing");
+
+    // Se a combinação for idêntica à padrão, limpa o custom.
+    setBinding(action, captured);
+    button.textContent = format(captured);
+    showToast("Atalho atualizado");
+  };
+
+  window.addEventListener("keydown", handler, true);
+
+  // Cancela se clicar fora ou pressionar Esc.
+  const cancel = (event: MouseEvent | KeyboardEvent) => {
+    if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+    window.removeEventListener("keydown", handler, true);
+    button.classList.remove("capturing");
+    button.textContent = original;
+    document.removeEventListener("mousedown", cancel);
+  };
+  document.addEventListener("mousedown", cancel);
 }
 
 function selectedShellLabel(): string {
@@ -1204,27 +1291,6 @@ function closeDialog(): boolean {
   dialogConfirmAction = null;
   return true;
 }
-
-const SHORTCUT_ROWS: Array<[string, string]> = [
-  ["Novo terminal", "Ctrl+T"],
-  ["Salvar estado do canvas", "Ctrl+S"],
-  ["Nova área de trabalho", "Ctrl+Shift+T"],
-  ["Próxima / área anterior", "Ctrl+Tab / Ctrl+Shift+Tab"],
-  ["Fechar terminal", "Ctrl+Shift+W"],
-  ["Sair do aplicativo", "Ctrl+Q"],
-  ["Ciclar foco entre terminais", "Ctrl+PageDown / Ctrl+PageUp"],
-  ["Renomear terminal", "F2"],
-  ["Zoom no cursor", "Ctrl + roda do mouse"],
-  ["Aumentar / diminuir zoom", "Ctrl+= / Ctrl+-"],
-  ["Resetar zoom", "Ctrl+0"],
-  ["Pan do canvas", "Espaço + arrastar · botão do meio"],
-  ["Navegar no canvas (clique antes em área vazia)", "WASD / setas"],
-  ["Trocar de área no canvas", "Q / E"],
-  ["Pan horizontal", "Shift + roda do mouse"],
-  ["Tela cheia", "F11 / Ctrl+Shift+F"],
-  ["Escolher tema", "Ctrl+Shift+L"],
-  ["Configurações", "Ctrl+,"],
-];
 
 /** Configura o comando automático de um terminal, salvo no perfil. */
 function editStartupCommand(terminal: TerminalWindow): void {
@@ -2696,7 +2762,7 @@ function bindGlobalShortcuts(): void {
         e.stopPropagation();
       };
 
-      if (mod && e.key.toLowerCase() === "s") {
+      if (matches(e, "save")) {
         own();
         saveNow();
         return;
@@ -2754,22 +2820,17 @@ function bindGlobalShortcuts(): void {
         // O fullscreen só sai por F11 ou pelo menu Exibir → Tela cheia.
         return;
       }
-      if (e.key === "F11") {
+      if (matches(e, "toggle-fullscreen")) {
         own();
         void toggleFullscreen();
         return;
       }
-      if (mod && e.shiftKey && e.key.toLowerCase() === "f") {
-        own();
-        void toggleFullscreen();
-        return;
-      }
-      if (mod && (e.key === "=" || e.key === "+")) {
+      if (matches(e, "zoom-in")) {
         own();
         canvas.zoomBy(1.1);
         return;
       }
-      if (mod && (e.key === "-" || e.key === "_")) {
+      if (matches(e, "zoom-out")) {
         own();
         canvas.zoomBy(1 / 1.1);
         return;
@@ -2779,22 +2840,22 @@ function bindGlobalShortcuts(): void {
         await cycleWorkspace(e.shiftKey ? -1 : 1);
         return;
       }
-      if (mod && e.shiftKey && e.key.toLowerCase() === "t") {
+      if (matches(e, "new-workspace")) {
         own();
         await createWorkspace();
         return;
       }
-      if (mod && !e.shiftKey && e.key.toLowerCase() === "t") {
+      if (matches(e, "new-terminal")) {
         own();
         await addTerminalAtCenter();
         return;
       }
-      if (mod && e.key.toLowerCase() === "q") {
+      if (matches(e, "quit")) {
         own();
         await quitApp();
         return;
       }
-      if (mod && e.shiftKey && e.key.toLowerCase() === "w") {
+      if (matches(e, "close-terminal")) {
         // Fecha mesmo com o foco dentro do terminal.
         own();
         focusedTerminal?.close();
@@ -2808,22 +2869,22 @@ function bindGlobalShortcuts(): void {
         focusedTerminal?.close();
         return;
       }
-      if (mod && e.key === "PageDown") {
+      if (matches(e, "cycle-focus-forward")) {
         own();
         cycleFocus(1);
         return;
       }
-      if (mod && e.key === "PageUp") {
+      if (matches(e, "cycle-focus-backward")) {
         own();
         cycleFocus(-1);
         return;
       }
-      if (mod && e.key === "0") {
+      if (matches(e, "zoom-reset")) {
         own();
         resetZoom();
         return;
       }
-      if (e.key === "F2" && focusedTerminal) {
+      if (matches(e, "rename-terminal") && focusedTerminal) {
         own();
         focusedTerminal.rename();
         return;
@@ -2833,12 +2894,12 @@ function bindGlobalShortcuts(): void {
         organizeTerminals();
         return;
       }
-      if (mod && e.shiftKey && e.key.toLowerCase() === "l") {
+      if (matches(e, "toggle-theme-menu")) {
         own();
         toggleThemeMenu();
         return;
       }
-      if (mod && e.key === ",") {
+      if (matches(e, "open-settings")) {
         own();
         if (!closeSettings()) openSettings("general");
         return;
@@ -2926,6 +2987,7 @@ function resetZoom(): void {
 
 function updateStatus(): void {
   syncMaximizedView();
+  minimap?.update();
   ui.zoom.textContent = `${Math.round(canvas.zoom * 100)}%`;
   const count = canvas.getAllTerminals().length;
   ui.count.textContent = String(count);
@@ -2946,6 +3008,7 @@ function syncMaximizedView(): void {
   // maximizado (os dois modos não coexistem).
   const minimized = !maximized && all.some((terminal) => terminal.element.classList.contains("minimized"));
   document.body.classList.toggle("terminals-minimized", minimized);
+  minimap?.setVisible(minimized);
 
   if (changed) {
     document.body.classList.toggle("terminal-maximized", maximized);
