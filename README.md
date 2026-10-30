@@ -504,11 +504,21 @@ As cores da interface ficam em variáveis CSS em `src/styles.css`, uma por
 própria (`decorations: false`), então o cabeçalho também desenha os controles de
 minimizar, maximizar e fechar.
 
-O terminal também **responde às consultas de paleta** (OSC 4/10/11/12) com as
-cores do tema atual (`src/osc-colors.ts`) e **avisa mudanças de esquema de
-cores** (modo 2031). Assim TUIs que derivam as cores do terminal — como o
-OpenCode com `theme.name: "system"` — acompanham o tema escolhido no app, inclusive
-ao trocá-lo com o terminal aberto, em vez de usar um tema próprio fixo.
+O terminal também **responde às consultas de paleta** (OSC 4/10/11/12), à
+consulta de esquema claro/escuro (`CSI ? 996 n`) e **avisa mudanças de esquema
+de cores** (modo 2031) em `src/osc-colors.ts`. Assim TUIs que derivam as cores
+do terminal — como o OpenCode com `theme.name: "system"` — acompanham o tema
+escolhido no app, inclusive ao trocá-lo com o terminal aberto, em vez de usar um
+tema próprio fixo.
+
+**Limitação no Windows**: o ConPTY não entrega ao TUI (em modo *raw*) as
+respostas que o emulador escreve de volta no terminal. Com isso um programa que
+pergunta "qual é a cor de fundo?" nunca recebe a resposta e cai no próprio
+padrão. No Linux o PTY é real, a resposta chega e o tema `system` funciona.
+Por isso a recomendação é `theme.name: "system"` no Linux e um tema embutido
+(`kanagawa`, `opencode`…) com `mode: "system"` no Windows. O tema escolhido
+também fica gravado em `~/.local/state/opencode/kv.json`, que sobrepõe o
+`cli.json` — ao trocar de tema, ajuste os dois.
 
 ## Inicialização automática
 

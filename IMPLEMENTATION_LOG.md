@@ -385,3 +385,15 @@ Verificação: `npx tsc --noEmit` e `npm run build` passaram; conferência visua
 - Fora do repositório: `~/.config/opencode/cli.json` (v2) recebeu `"theme": { "name": "system", "mode": "system" }` (backup em `cli.json.bak-20261029`). `name: system` faz o OpenCode derivar as cores do terminal; depende das respostas OSC 4/10/11 e do modo 2031 que `src/osc-colors.ts` já implementa.
 
 Verificação: harness em navegador importando `osc-colors.ts` e `theme.ts` reais confirmou as respostas — `OSC 11` → `rgb:2828/2c2c/3434`, `OSC 10` → `rgb:abab/b2b2/bfbf`, `OSC 4` para os índices 0–3 e `CSI ? 997 ; 1 n` ao habilitar o modo 2031 (escuro) / `2 n` ao trocar para claro. `cargo build --release --features custom-protocol` passou e o atalho foi atualizado.
+
+### Correção - consulta de esquema claro/escuro (CSI ? 996 n)
+
+O OpenCode pergunta CSI ? 996 n para saber se o terminal está claro ou escuro. O app só respondia as notificações do modo 2031 (CSI ? 997 ; n n), então a consulta ficava sem resposta e o programa presumia **escuro**: num terminal claro ele pintava os painéis de preto (abas, barra lateral, caixa de entrada) enquanto o texto/fundo base, que usam as cores padrão do terminal, ficavam claros. Agora `src/osc-colors.ts` responde `CSI ? 996 ; 2 n` (claro) / `1 n` (escuro) conforme o tema ativo.
+
+Verificação em navegador com os módulos reais: `catppuccin-latte` → OSC 11 `rgb:efef/f1f1/f5f5` e `?996;2n`; `catppuccin-mocha` → OSC 11 `rgb:1e1e/1e1e/2e2e` e `?996;1n`. `npx tsc --noEmit` e `npm run build` passaram.
+
+### Investigação - tema do OpenCode no Windows
+
+- O tema do TUI fica em `~/.local/state/opencode/kv.json` e **sobrepõe** o `cli.json`; estava fixo em `lucent-orng`, então nenhuma mudança de `theme.name` fazia efeito. Corrigido no estado (backups `kv.json.bak-20261029`/`bak2`).
+- Mesmo com `system` ativo, o OpenCode emite a escala de cinza dos painéis a partir de **preto** (`rgb(0,0,0)`…`rgb(11,11,11)`), ou seja, não recebe a paleta. Sondas com PTY: a consulta OSC 11 chega ao emulador, mas a resposta escrita no PTY **não chega** ao processo em modo *raw* no Windows (com texto simples também não); em modo *cooked* chega. Testados também formatos `ST`/`BEL`/`rgb:rr/gg/bb`, `COLORFGBG`, `theme.mode` light/dark e os flags `PSEUDOCONSOLE_WIN32_INPUT_MODE`/`PASSTHROUGH_MODE` do ConPTY — nada muda. No Linux o PTY é real e a resposta chega, por isso `system` funciona lá.
+- Recomendação aplicada: Windows com `theme.name: "kanagawa"` + `mode: "system"` (`cli.json` e `kv.json`); Linux com `system`. Documentado no README.

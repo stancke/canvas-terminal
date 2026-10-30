@@ -173,6 +173,14 @@ export function installColorReporting(
       notifyColorScheme(currentThemeMode());
       return false;
     }),
+    // Consulta do esquema (`CSI ? 996 n`): claro = 2, escuro = 1. Sem esta
+    // resposta o programa presume escuro e desenha os painéis com cinzas
+    // escuros mesmo num terminal claro (era o caso do OpenCode).
+    term.parser.registerCsiHandler({ prefix: "?", final: "n" }, (params) => {
+      if (!params.some((param) => param === 996)) return false;
+      write(`\x1b[?996;${currentThemeMode() === "light" ? 2 : 1}n`);
+      return true;
+    }),
     term.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
       if (!params.some((param) => param === 2031)) return false;
       reportsColorScheme = false;
